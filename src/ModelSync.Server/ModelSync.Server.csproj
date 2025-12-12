@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Protobuf Include="Protos/modelsync.proto" GrpcServices="Server" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" Version="2.65.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ModelSync.Core/ModelSync.Core.csproj" />
+  </ItemGroup>
+</Project>

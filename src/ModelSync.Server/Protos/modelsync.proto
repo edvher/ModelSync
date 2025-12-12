@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+option csharp_namespace = "ModelSync.Server";
+
+package modelsync;
+
+enum OperationType {
+  OPERATION_TYPE_NONE = 0;
+  OPERATION_TYPE_CREATE_ELEMENT = 1;
+  OPERATION_TYPE_DELETE_ELEMENT = 2;
+  OPERATION_TYPE_SET_PROPERTY = 3;
+  OPERATION_TYPE_ADD_TO_LIST_PROPERTY = 4;
+  OPERATION_TYPE_REMOVE_FROM_LIST_PROPERTY = 5;
+  OPERATION_TYPE_ADD_TO_SET_PROPERTY = 6;
+  OPERATION_TYPE_REMOVE_FROM_SET_PROPERTY = 7;
+  OPERATION_TYPE_UPDATE_MAP_ENTRY = 8;
+  OPERATION_TYPE_REMOVE_MAP_ENTRY = 9;
+}
+
+enum ValueKind {
+  VALUE_KIND_STRING = 0;
+  VALUE_KIND_INTEGER = 1;
+  VALUE_KIND_DOUBLE = 2;
+  VALUE_KIND_BOOLEAN = 3;
+  VALUE_KIND_REFERENCE = 4;
+  VALUE_KIND_JSON = 5;
+}
+
+message OperationMessage {
+  string id = 1;
+  OperationType type = 2;
+  string model_name = 3;
+  string element_id = 4;
+  string element_type = 5;
+  string property_name = 6;
+  string value = 7;
+  string after_item_id = 8;
+  string item_id = 9;
+  string map_key = 10;
+  ValueKind value_kind = 11;
+  int64 timestamp_unix_ms = 12;
+}
+
+message CheckoutRequest {
+  string model_name = 1;
+}
+
+message CheckoutResponse {
+  repeated OperationMessage operations = 1;
+}
+
+message ApplyOperationRequest {
+  string model_name = 1;
+  OperationMessage operation = 2;
+}
+
+message OperationAck {
+  string operation_id = 1;
+}
+
+message SubscribeRequest {
+  string model_name = 1;
+}
+
+message OperationEvent {
+  OperationMessage operation = 1;
+}
+
+service ModelSyncApi {
+  rpc Checkout(CheckoutRequest) returns (CheckoutResponse);
+  rpc ApplyOperation(ApplyOperationRequest) returns (OperationAck);
+  rpc SubscribeOperations(SubscribeRequest) returns (stream OperationEvent);
+}
