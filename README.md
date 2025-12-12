@@ -9,7 +9,7 @@ ModelSync is a lightweight experimental platform for collaborative model editing
 
 ## Running the server
 
-1. Install the [.NET 9 SDK](https://dotnet.microsoft.com/) (preview at the time of writing).
+1. Install the [.NET 10 SDK](https://dotnet.microsoft.com/) (preview at the time of writing).
 2. Start the gRPC host:
 
    ```bash
