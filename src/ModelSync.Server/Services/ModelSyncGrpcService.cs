@@ -63,21 +63,21 @@ public class ModelSyncGrpcService : ModelSyncApi.ModelSyncApiBase
             ItemId = op.ItemId ?? string.Empty,
             MapKey = op.MapKey ?? string.Empty,
             Value = op.NewValue?.Content ?? string.Empty,
-            ValueKind = MapValueKind(op.NewValue?.Kind ?? Core.ValueKind.String),
-            Type = MapOperationType(op.Type),
+            ValueKind = MapToProtoValueKind(op.NewValue?.Kind ?? Core.ValueKind.String),
+            Type = MapToProtoOperationType(op.Type),
             TimestampUnixMs = op.Timestamp.ToUnixTimeMilliseconds()
         };
     }
 
     private static Operation FromMessage(OperationMessage message, string modelName)
     {
-        return new Operation(Guid.TryParse(message.Id, out var parsed) ? parsed : Guid.NewGuid(), MapOperationType(message.Type))
+        return new Operation(Guid.TryParse(message.Id, out var parsed) ? parsed : Guid.NewGuid(), MapToOperationType(message.Type))
         {
             ModelName = modelName,
             ElementId = message.ElementId,
             ElementType = string.IsNullOrWhiteSpace(message.ElementType) ? null : message.ElementType,
             PropertyName = string.IsNullOrWhiteSpace(message.PropertyName) ? null : message.PropertyName,
-            NewValue = new PropertyValue(MapValueKind(message.ValueKind), string.IsNullOrEmpty(message.Value) ? null : message.Value),
+            NewValue = new PropertyValue(MapToValueKind(message.ValueKind), string.IsNullOrEmpty(message.Value) ? null : message.Value),
             AfterItemId = string.IsNullOrWhiteSpace(message.AfterItemId) ? null : message.AfterItemId,
             ItemId = string.IsNullOrWhiteSpace(message.ItemId) ? null : message.ItemId,
             MapKey = string.IsNullOrWhiteSpace(message.MapKey) ? null : message.MapKey,
@@ -85,51 +85,51 @@ public class ModelSyncGrpcService : ModelSyncApi.ModelSyncApiBase
         };
     }
 
-    private static ProtoOperationType MapOperationType(OperationType type) => type switch
+    private static ProtoOperationType MapToProtoOperationType(ModelSync.Core.OperationType type) => type switch
     {
-        OperationType.CreateElement => ProtoOperationType.OperationTypeCreateElement,
-        OperationType.DeleteElement => ProtoOperationType.OperationTypeDeleteElement,
-        OperationType.SetProperty => ProtoOperationType.OperationTypeSetProperty,
-        OperationType.AddToListProperty => ProtoOperationType.OperationTypeAddToListProperty,
-        OperationType.RemoveFromListProperty => ProtoOperationType.OperationTypeRemoveFromListProperty,
-        OperationType.AddToSetProperty => ProtoOperationType.OperationTypeAddToSetProperty,
-        OperationType.RemoveFromSetProperty => ProtoOperationType.OperationTypeRemoveFromSetProperty,
-        OperationType.UpdateMapEntry => ProtoOperationType.OperationTypeUpdateMapEntry,
-        OperationType.RemoveMapEntry => ProtoOperationType.OperationTypeRemoveMapEntry,
-        _ => ProtoOperationType.OperationTypeNone
+        ModelSync.Core.OperationType.CreateElement => ProtoOperationType.CreateElement,
+        ModelSync.Core.OperationType.DeleteElement => ProtoOperationType.DeleteElement,
+        ModelSync.Core.OperationType.SetProperty => ProtoOperationType.SetProperty,
+        ModelSync.Core.OperationType.AddToListProperty => ProtoOperationType.AddToListProperty,
+        ModelSync.Core.OperationType.RemoveFromListProperty => ProtoOperationType.RemoveFromListProperty,
+        ModelSync.Core.OperationType.AddToSetProperty => ProtoOperationType.AddToSetProperty,
+        ModelSync.Core.OperationType.RemoveFromSetProperty => ProtoOperationType.RemoveFromSetProperty,
+        ModelSync.Core.OperationType.UpdateMapEntry => ProtoOperationType.UpdateMapEntry,
+        ModelSync.Core.OperationType.RemoveMapEntry => ProtoOperationType.RemoveMapEntry,
+        _ => ProtoOperationType.None
     };
 
-    private static OperationType MapOperationType(ProtoOperationType type) => type switch
+    private static ModelSync.Core.OperationType MapToOperationType(ProtoOperationType type) => type switch
     {
-        ProtoOperationType.OperationTypeCreateElement => OperationType.CreateElement,
-        ProtoOperationType.OperationTypeDeleteElement => OperationType.DeleteElement,
-        ProtoOperationType.OperationTypeSetProperty => OperationType.SetProperty,
-        ProtoOperationType.OperationTypeAddToListProperty => OperationType.AddToListProperty,
-        ProtoOperationType.OperationTypeRemoveFromListProperty => OperationType.RemoveFromListProperty,
-        ProtoOperationType.OperationTypeAddToSetProperty => OperationType.AddToSetProperty,
-        ProtoOperationType.OperationTypeRemoveFromSetProperty => OperationType.RemoveFromSetProperty,
-        ProtoOperationType.OperationTypeUpdateMapEntry => OperationType.UpdateMapEntry,
-        ProtoOperationType.OperationTypeRemoveMapEntry => OperationType.RemoveMapEntry,
-        _ => OperationType.None
+        ProtoOperationType.CreateElement => ModelSync.Core.OperationType.CreateElement,
+        ProtoOperationType.DeleteElement => ModelSync.Core.OperationType.DeleteElement,
+        ProtoOperationType.SetProperty => ModelSync.Core.OperationType.SetProperty,
+        ProtoOperationType.AddToListProperty => ModelSync.Core.OperationType.AddToListProperty,
+        ProtoOperationType.RemoveFromListProperty => ModelSync.Core.OperationType.RemoveFromListProperty,
+        ProtoOperationType.AddToSetProperty => ModelSync.Core.OperationType.AddToSetProperty,
+        ProtoOperationType.RemoveFromSetProperty => ModelSync.Core.OperationType.RemoveFromSetProperty,
+        ProtoOperationType.UpdateMapEntry => ModelSync.Core.OperationType.UpdateMapEntry,
+        ProtoOperationType.RemoveMapEntry => ModelSync.Core.OperationType.RemoveMapEntry,
+        _ => ModelSync.Core.OperationType.None
     };
 
-    private static ProtoValueKind MapValueKind(ValueKind kind) => kind switch
+    private static ProtoValueKind MapToProtoValueKind(ModelSync.Core.ValueKind kind) => kind switch
     {
-        ValueKind.Integer => ProtoValueKind.ValueKindInteger,
-        ValueKind.Double => ProtoValueKind.ValueKindDouble,
-        ValueKind.Boolean => ProtoValueKind.ValueKindBoolean,
-        ValueKind.Reference => ProtoValueKind.ValueKindReference,
-        ValueKind.Json => ProtoValueKind.ValueKindJson,
-        _ => ProtoValueKind.ValueKindString
+        ModelSync.Core.ValueKind.Integer => ProtoValueKind.Integer,
+        ModelSync.Core.ValueKind.Double => ProtoValueKind.Double,
+        ModelSync.Core.ValueKind.Boolean => ProtoValueKind.Boolean,
+        ModelSync.Core.ValueKind.Reference => ProtoValueKind.Reference,
+        ModelSync.Core.ValueKind.Json => ProtoValueKind.Json,
+        _ => ProtoValueKind.String
     };
 
-    private static ValueKind MapValueKind(ProtoValueKind kind) => kind switch
+    private static ModelSync.Core.ValueKind MapToValueKind(ProtoValueKind kind) => kind switch
     {
-        ProtoValueKind.ValueKindInteger => ValueKind.Integer,
-        ProtoValueKind.ValueKindDouble => ValueKind.Double,
-        ProtoValueKind.ValueKindBoolean => ValueKind.Boolean,
-        ProtoValueKind.ValueKindReference => ValueKind.Reference,
-        ProtoValueKind.ValueKindJson => ValueKind.Json,
-        _ => ValueKind.String
+        ProtoValueKind.Integer => ModelSync.Core.ValueKind.Integer,
+        ProtoValueKind.Double => ModelSync.Core.ValueKind.Double,
+        ProtoValueKind.Boolean => ModelSync.Core.ValueKind.Boolean,
+        ProtoValueKind.Reference => ModelSync.Core.ValueKind.Reference,
+        ProtoValueKind.Json => ModelSync.Core.ValueKind.Json,
+        _ => ModelSync.Core.ValueKind.String
     };
 }
