@@ -1,0 +1,82 @@
+@page "/"
+@page "/dashboard"
+@inject OperationDashboardService DashboardService
+@implements IDisposable
+
+<PageTitle>Operation Dashboard</PageTitle>
+
+<div class="dashboard">
+    <header class="dashboard-header">
+        <div>
+            <h2>Operation Tree</h2>
+            <p class="muted">Live view of the current operation graph from left to right.</p>
+        </div>
+        <button class="refresh" @onclick="Refresh">Refresh snapshot</button>
+    </header>
+
+    @if (_displayRoot is null)
+    {
+        <p class="muted">No operations available yet.</p>
+    }
+    else
+    {
+        <div class="tree-container">
+            <OperationNodeView Node="_displayRoot" ChainVisibility="_chainVisibility" OnExpandChain="HandleChainExpansion" />
+        </div>
+    }
+</div>
+
+@code {
+    private readonly Dictionary<Guid, int> _chainVisibility = new();
+    private readonly string _modelName = "P";
+    private OperationTreeDisplayNode? _displayRoot;
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        RefreshSnapshot();
+        StartSubscription();
+    }
+
+    private void RefreshSnapshot()
+    {
+        var snapshot = DashboardService.GetSnapshot();
+        _displayRoot = OperationTreeViewBuilder.Build(snapshot);
+    }
+
+    private void Refresh() => RefreshSnapshot();
+
+    private void StartSubscription()
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+
+        _ = Task.Run(async () =>
+        {
+            await foreach (var _ in DashboardService.Subscribe(_modelName, _cts.Token))
+            {
+                await InvokeAsync(() =>
+                {
+                    RefreshSnapshot();
+                    StateHasChanged();
+                });
+            }
+        });
+    }
+
+    private void HandleChainExpansion(ChainExpansion expansion)
+    {
+        var current = _chainVisibility.TryGetValue(expansion.ChainKey, out var visible) ? visible : 0;
+        if (current < expansion.ChainLength)
+        {
+            _chainVisibility[expansion.ChainKey] = current + 1;
+            StateHasChanged();
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

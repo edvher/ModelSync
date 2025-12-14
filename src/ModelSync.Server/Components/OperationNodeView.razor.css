@@ -1,0 +1,58 @@
+.tree-node {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.operation-card {
+    min-width: 180px;
+    background: #eef2ff;
+    border: 1px solid #cbd5ff;
+    border-radius: 10px;
+    padding: 10px 12px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+.operation-title {
+    font-weight: 700;
+    color: #1d4ed8;
+}
+
+.operation-meta {
+    font-size: 12px;
+    color: #475569;
+    word-break: break-all;
+}
+
+.children {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-left: 18px;
+    border-left: 2px dashed #d1d5db;
+}
+
+.chain-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.chain-row {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.chain-placeholder {
+    background: #fbbf24;
+    border: none;
+    color: #1f2937;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    box-shadow: 0 2px 6px rgba(251, 191, 36, 0.35);
+}
