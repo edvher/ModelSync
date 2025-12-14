@@ -44,5 +44,10 @@ public class ModelSyncClient : IAsyncDisposable
         }
     }
 
-    public ValueTask DisposeAsync() => _channel.DisposeAsync();
+    public ValueTask DisposeAsync()
+    {
+        _channel.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
 }

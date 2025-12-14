@@ -1,33 +1,33 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.0.33829.131
+# Visual Studio Version 18
+VisualStudioVersion = 18.1.11304.174 d18.0
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ModelSync.Core", "src/ModelSync.Core/ModelSync.Core.csproj", "{291A4025-8A0F-4E1D-9B37-B6DA65C7D0B4}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ModelSync.Core", "src\ModelSync.Core\ModelSync.Core.csproj", "{291A4025-8A0F-4E1D-9B37-B6DA65C7D0B4}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ModelSync.Server", "src/ModelSync.Server/ModelSync.Server.csproj", "{CC6BFD1A-4FDD-49B6-A7B1-FF2438A1E2CE}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ModelSync.Server", "src\ModelSync.Server\ModelSync.Server.csproj", "{CC6BFD1A-4FDD-49B6-A7B1-FF2438A1E2CE}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ModelSync.Sdk", "src/ModelSync.Sdk/ModelSync.Sdk.csproj", "{A9B84F58-B41E-4B5E-92EA-95DA3890ABFD}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ModelSync.Sdk", "src\ModelSync.Sdk\ModelSync.Sdk.csproj", "{A9B84F58-B41E-4B5E-92EA-95DA3890ABFD}"
 EndProject
 Global
-    GlobalSection(SolutionConfigurationPlatforms) = preSolution
-        Debug|Any CPU = Debug|Any CPU
-        Release|Any CPU = Release|Any CPU
-    EndGlobalSection
-    GlobalSection(ProjectConfigurationPlatforms) = postSolution
-        {291A4025-8A0F-4E1D-9B37-B6DA65C7D0B4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-        {291A4025-8A0F-4E1D-9B37-B6DA65C7D0B4}.Debug|Any CPU.Build.0 = Debug|Any CPU
-        {291A4025-8A0F-4E1D-9B37-B6DA65C7D0B4}.Release|Any CPU.ActiveCfg = Release|Any CPU
-        {291A4025-8A0F-4E1D-9B37-B6DA65C7D0B4}.Release|Any CPU.Build.0 = Release|Any CPU
-        {CC6BFD1A-4FDD-49B6-A7B1-FF2438A1E2CE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-        {CC6BFD1A-4FDD-49B6-A7B1-FF2438A1E2CE}.Debug|Any CPU.Build.0 = Debug|Any CPU
-        {CC6BFD1A-4FDD-49B6-A7B1-FF2438A1E2CE}.Release|Any CPU.ActiveCfg = Release|Any CPU
-        {CC6BFD1A-4FDD-49B6-A7B1-FF2438A1E2CE}.Release|Any CPU.Build.0 = Release|Any CPU
-        {A9B84F58-B41E-4B5E-92EA-95DA3890ABFD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-        {A9B84F58-B41E-4B5E-92EA-95DA3890ABFD}.Debug|Any CPU.Build.0 = Debug|Any CPU
-        {A9B84F58-B41E-4B5E-92EA-95DA3890ABFD}.Release|Any CPU.ActiveCfg = Release|Any CPU
-        {A9B84F58-B41E-4B5E-92EA-95DA3890ABFD}.Release|Any CPU.Build.0 = Release|Any CPU
-    EndGlobalSection
-    GlobalSection(SolutionProperties) = preSolution
-        HideSolutionNode = FALSE
-    EndGlobalSection
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{291A4025-8A0F-4E1D-9B37-B6DA65C7D0B4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{291A4025-8A0F-4E1D-9B37-B6DA65C7D0B4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{291A4025-8A0F-4E1D-9B37-B6DA65C7D0B4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{291A4025-8A0F-4E1D-9B37-B6DA65C7D0B4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CC6BFD1A-4FDD-49B6-A7B1-FF2438A1E2CE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CC6BFD1A-4FDD-49B6-A7B1-FF2438A1E2CE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CC6BFD1A-4FDD-49B6-A7B1-FF2438A1E2CE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CC6BFD1A-4FDD-49B6-A7B1-FF2438A1E2CE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A9B84F58-B41E-4B5E-92EA-95DA3890ABFD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A9B84F58-B41E-4B5E-92EA-95DA3890ABFD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A9B84F58-B41E-4B5E-92EA-95DA3890ABFD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A9B84F58-B41E-4B5E-92EA-95DA3890ABFD}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
 EndGlobal
