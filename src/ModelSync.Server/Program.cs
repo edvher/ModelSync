@@ -21,5 +21,6 @@ app.MapRazorComponents<App>()
 
 app.MapGrpcService<ModelSyncGrpcService>();
 app.MapGet("/health", () => "ModelSync gRPC server is running. Use a gRPC client to communicate.");
+app.UseAntiforgery();
 
 app.Run();
