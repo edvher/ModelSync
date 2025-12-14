@@ -112,6 +112,19 @@ public class OperationTree
         return null;
     }
 
+    public OperationTreeSnapshot Snapshot()
+    {
+        var nodes = _nodes.ToDictionary(
+            pair => pair.Key,
+            pair => new OperationNodeSnapshot(
+                pair.Key,
+                pair.Value.Operation,
+                pair.Value.Parent,
+                pair.Value.Children.ToList()));
+
+        return new OperationTreeSnapshot(RootId, nodes);
+    }
+
     private List<Guid> BuildPath(Guid target)
     {
         var result = new List<Guid>();

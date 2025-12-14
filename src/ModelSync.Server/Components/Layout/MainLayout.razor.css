@@ -1,0 +1,31 @@
+.page {
+    min-height: 100vh;
+    background-color: #f7f9fb;
+    color: #1f2933;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: linear-gradient(90deg, #1d4ed8 0%, #2563eb 100%);
+    color: #f8fafc;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.top-bar nav a {
+    color: #e0f2fe;
+    text-decoration: none;
+    font-weight: 600;
+    margin-left: 16px;
+}
+
+a {
+    color: inherit;
+}
+
+main {
+    padding: 24px;
+}

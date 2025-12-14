@@ -1,0 +1,101 @@
+@using Microsoft.AspNetCore.Components
+
+<div class="tree-node">
+    <div class="operation-card" title="@BuildTooltip(Node.Snapshot.Operation)">
+        <div class="operation-title">@Node.Snapshot.Operation.Type</div>
+        <div class="operation-meta">@Node.Snapshot.Operation.Id</div>
+        <div class="operation-meta">@Node.Snapshot.Operation.ModelName</div>
+    </div>
+
+    @if (Node.CollapsedChain is not null)
+    {
+        @RenderCollapsedChain(Node.CollapsedChain)
+    }
+    else if (Node.Children.Count > 0)
+    {
+        <div class="children">
+            @foreach (var child in Node.Children)
+            {
+                <OperationNodeView Node="child" ChainVisibility="ChainVisibility" OnExpandChain="OnExpandChain" />
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public OperationTreeDisplayNode Node { get; set; } = default!;
+    [Parameter] public Dictionary<Guid, int> ChainVisibility { get; set; } = default!;
+    [Parameter] public EventCallback<ChainExpansion> OnExpandChain { get; set; }
+
+    private RenderFragment RenderCollapsedChain(CollapsedChain chain) => builder =>
+    {
+        var visibleCount = ChainVisibility.TryGetValue(chain.Key, out var count) ? Math.Min(count, chain.Nodes.Count) : 0;
+        var sequence = 0;
+
+        builder.OpenElement(sequence++, "div");
+        builder.AddAttribute(sequence++, "class", "chain-container");
+
+        builder.OpenElement(sequence++, "div");
+        builder.AddAttribute(sequence++, "class", "chain-row");
+
+        if (visibleCount == 0)
+        {
+            BuildCollapsedPlaceholder(builder, ref sequence, chain, chain.Nodes.Count);
+        }
+        else
+        {
+            for (var index = 0; index < visibleCount; index++)
+            {
+                var chainNode = chain.Nodes[index];
+                builder.OpenComponent<OperationNodeView>(sequence++);
+                var display = new OperationTreeDisplayNode(chainNode.Snapshot);
+                foreach (var child in chainNode.Children)
+                {
+                    display.Children.Add(child);
+                }
+
+                builder.AddAttribute(sequence++, "Node", display);
+                builder.AddAttribute(sequence++, "ChainVisibility", ChainVisibility);
+                builder.AddAttribute(sequence++, "OnExpandChain", OnExpandChain);
+                builder.CloseComponent();
+            }
+
+            if (visibleCount < chain.Nodes.Count)
+            {
+                BuildCollapsedPlaceholder(builder, ref sequence, chain, chain.Nodes.Count - visibleCount);
+            }
+            else if (chain.Nodes[^1].Children.Count > 0)
+            {
+                builder.OpenElement(sequence++, "div");
+                builder.AddAttribute(sequence++, "class", "children");
+                foreach (var child in chain.Nodes[^1].Children)
+                {
+                    builder.OpenComponent<OperationNodeView>(sequence++);
+                    builder.AddAttribute(sequence++, "Node", child);
+                    builder.AddAttribute(sequence++, "ChainVisibility", ChainVisibility);
+                    builder.AddAttribute(sequence++, "OnExpandChain", OnExpandChain);
+                    builder.CloseComponent();
+                }
+
+                builder.CloseElement();
+            }
+        }
+
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private void BuildCollapsedPlaceholder(RenderTreeBuilder builder, ref int sequence, CollapsedChain chain, int remaining)
+    {
+        builder.OpenElement(sequence++, "button");
+        builder.AddAttribute(sequence++, "class", "chain-placeholder");
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => OnExpandChain.InvokeAsync(new ChainExpansion(chain.Key, chain.Nodes.Count))));
+        builder.AddContent(sequence++, $"Expand chain (+{remaining} operations)");
+        builder.CloseElement();
+    }
+
+    private static string BuildTooltip(Operation operation)
+    {
+        return $"Model: {operation.ModelName}\nType: {operation.Type}\nElement: {operation.ElementId}\nProperty: {operation.PropertyName ?? "-"}\nValue: {operation.NewValue?.Content ?? "-"}\nTimestamp: {operation.Timestamp:O}";
+    }
+}
