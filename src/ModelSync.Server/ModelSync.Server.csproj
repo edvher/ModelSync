@@ -5,6 +5,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <None Remove="Components\Layout\MainLayout.razor.css" />
+    <None Remove="Components\OperationNodeView.razor.css" />
+    <None Remove="Components\Pages\Dashboard.razor.css" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Components\Layout\MainLayout.razor.css" />
+    <Content Include="Components\OperationNodeView.razor.css" />
+    <Content Include="Components\Pages\Dashboard.razor.css" />
+  </ItemGroup>
+  <ItemGroup>
     <Protobuf Include="Protos/modelsync.proto" GrpcServices="Server" />
   </ItemGroup>
   <ItemGroup>
