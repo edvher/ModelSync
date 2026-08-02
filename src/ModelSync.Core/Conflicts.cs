@@ -34,7 +34,9 @@ public enum ConflictCategory
     /// <summary>Concurrent list inserts competing for the same position, or contradictory positions for the same item.</summary>
     ListOrder,
     /// <summary>A list insert whose anchor item was deleted concurrently.</summary>
-    ListAnchorDeleted
+    ListAnchorDeleted,
+    /// <summary>A list insert whose anchor item was moved concurrently; the insert must follow it.</summary>
+    ListAnchorMoved
 }
 
 /// <summary>The manual-triage policy associated with a conflict.</summary>

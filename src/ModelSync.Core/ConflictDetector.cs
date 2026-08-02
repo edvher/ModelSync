@@ -5,303 +5,344 @@ namespace ModelSync.Core;
 /// operation sequences (the public/parent delta and the private/child delta
 /// after their branching point).
 ///
-/// Detection is O(n + m): the parent delta is indexed once by conflict key,
-/// then every child operation probes the index. Keys follow the property
-/// semantics: (element), (element, property), (element, property, member),
-/// (element, property, mapKey), and for lists both the item identity and the
-/// insert anchor.
+/// Detection is O(n + m): each delta is indexed once by its NET effects —
+/// the last operation per element lifecycle, per property slot, per set
+/// member, per map key and per list item — and the two indexes are joined on
+/// their keys. Net indexing implements the thesis footnote "Delete ≙
+/// (Modify*) Delete": a branch is classified by where it ended up, not by
+/// every intermediate operation it took.
 /// </summary>
 public static class ConflictDetector
 {
-    private enum ProbeKind
+    /// <summary>The per-delta net index used to join the two sides.</summary>
+    internal sealed class DeltaIndex
     {
-        Single,
-        Set,
-        Map,
-        /// <summary>Same list item touched on both sides.</summary>
-        ListNode,
-        /// <summary>Two inserts competing for the same anchor.</summary>
-        ListAnchor,
-        /// <summary>Child insert whose anchor item the parent removed.</summary>
-        ListAnchorRemovedByParent,
-        /// <summary>Child removed an item the parent used as insert anchor.</summary>
-        ListAnchorRemovedByChild
+        /// <summary>Last Create/Delete per element.</summary>
+        public Dictionary<string, Operation> NetElement { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Last operation per keyed slot (single, set member, map key, list item).</summary>
+        public Dictionary<string, Operation> NetKeyed { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Net list inserts grouped by anchor key, in delta order.</summary>
+        public Dictionary<string, List<Operation>> AnchorGroups { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Elements touched by property operations.</summary>
+        public HashSet<string> TouchedElements { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The raw delta, needed by the resolver for chain closure.</summary>
+        public IReadOnlyList<Operation> Delta { get; }
+
+        /// <summary>Last insert per list item, even when a later remove superseded it.</summary>
+        public Dictionary<string, Operation> LastInsertPerItem { get; } = new(StringComparer.Ordinal);
+
+        public DeltaIndex(IReadOnlyList<Operation> delta)
+        {
+            Delta = delta;
+            foreach (var op in delta)
+            {
+                if (op.IsElementOperation)
+                {
+                    NetElement[op.ElementId] = op;
+                }
+                else if (op.IsPropertyOperation)
+                {
+                    TouchedElements.Add(op.ElementId);
+                    NetKeyed[KeyOf(op)] = op;
+                    if (op.Type == OperationType.InsertListItem)
+                    {
+                        LastInsertPerItem[KeyOf(op)] = op;
+                    }
+                }
+            }
+
+            // "Carriers": items that were net-removed but still anchor surviving
+            // inserts (directly or transitively). Their tombstone position still
+            // matters, so their last insert keeps competing at its anchor.
+            var carriers = new HashSet<string>(StringComparer.Ordinal);
+            var work = new Queue<Operation>(NetKeyed.Values.Where(op => op.Type == OperationType.InsertListItem));
+            while (work.Count > 0)
+            {
+                var op = work.Dequeue();
+                if (op.AfterItemId is null)
+                {
+                    continue;
+                }
+
+                var anchorItemKey = ListItemKey(op.ElementId, op.PropertyName!, op.AfterItemId);
+                if (NetKeyed.GetValueOrDefault(anchorItemKey)?.Type == OperationType.RemoveListItem &&
+                    LastInsertPerItem.TryGetValue(anchorItemKey, out var carrierInsert) &&
+                    carriers.Add(anchorItemKey))
+                {
+                    work.Enqueue(carrierInsert);
+                }
+            }
+
+            // Build anchor groups from net list inserts plus carrier inserts: an
+            // insert superseded by a later move of the same item no longer
+            // competes for its old anchor, and a removed item competes only when
+            // followers still depend on its position.
+            foreach (var op in delta)
+            {
+                if (op.Type != OperationType.InsertListItem)
+                {
+                    continue;
+                }
+
+                var itemKey = KeyOf(op);
+                var isNetInsert = ReferenceEquals(NetKeyed[itemKey], op);
+                var isCarrier = carriers.Contains(itemKey) && ReferenceEquals(LastInsertPerItem[itemKey], op);
+                if (!isNetInsert && !isCarrier)
+                {
+                    continue;
+                }
+
+                var key = AnchorKey(op.ElementId, op.PropertyName!, op.AfterItemId);
+                if (!AnchorGroups.TryGetValue(key, out var group))
+                {
+                    group = new List<Operation>();
+                    AnchorGroups[key] = group;
+                }
+
+                group.Add(op);
+            }
+        }
+
+        /// <summary>
+        /// The element's net property modification character, derived from the
+        /// net keyed operations: constructive if any surviving slot operation
+        /// adds or changes content. Returns the operation used for reporting.
+        /// </summary>
+        public (Operation? Constructive, Operation? Destructive) NetTouch(string elementId)
+        {
+            Operation? constructive = null;
+            Operation? destructive = null;
+            foreach (var op in NetKeyed.Values)
+            {
+                if (!string.Equals(op.ElementId, elementId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (op.IsConstructive)
+                {
+                    constructive = op;
+                }
+                else
+                {
+                    destructive = op;
+                }
+            }
+
+            return (constructive, destructive);
+        }
     }
 
     public static IReadOnlyList<Conflict> Detect(
         IReadOnlyList<Operation> parentDelta,
         IReadOnlyList<Operation> childDelta)
     {
-        // --- index the parent delta -------------------------------------------------
-        var lifecycle = new Dictionary<string, Operation>(StringComparer.Ordinal);
-        var lastConstructiveTouch = new Dictionary<string, Operation>(StringComparer.Ordinal);
-        var lastAnyTouch = new Dictionary<string, Operation>(StringComparer.Ordinal);
-        var keyed = new Dictionary<string, Operation>(StringComparer.Ordinal);
+        var parent = new DeltaIndex(parentDelta);
+        var child = new DeltaIndex(childDelta);
 
-        foreach (var op in parentDelta)
-        {
-            if (op.IsElementOperation)
-            {
-                lifecycle[op.ElementId] = op;
-            }
-            else if (op.IsPropertyOperation)
-            {
-                lastAnyTouch[op.ElementId] = op;
-                if (op.IsConstructive)
-                {
-                    lastConstructiveTouch[op.ElementId] = op;
-                }
-
-                foreach (var key in RegistrationKeys(op))
-                {
-                    keyed[key] = op;
-                }
-            }
-        }
-
-        // --- probe with the child delta ---------------------------------------------
         var conflicts = new List<Conflict>();
-        var seenPairs = new HashSet<(Guid, Guid)>();
-        var elementExistenceEmitted = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var child in childDelta)
-        {
-            switch (child.Type)
-            {
-                case OperationType.DeleteElement:
-                    DetectForChildDelete(child, lifecycle, lastConstructiveTouch, lastAnyTouch, conflicts, seenPairs, elementExistenceEmitted);
-                    break;
-
-                case OperationType.CreateElement:
-                    DetectForChildCreate(child, lifecycle, conflicts, seenPairs);
-                    break;
-
-                default:
-                    if (child.IsPropertyOperation)
-                    {
-                        DetectForChildPropertyOp(child, lifecycle, keyed, conflicts, seenPairs, elementExistenceEmitted);
-                    }
-
-                    break;
-            }
-        }
-
+        DetectElementExistence(parent, child, conflicts);
+        DetectKeyedSlots(parent, child, conflicts);
+        DetectListAnchors(parent, child, conflicts);
         return conflicts;
     }
 
-    private static void DetectForChildDelete(
-        Operation child,
-        Dictionary<string, Operation> lifecycle,
-        Dictionary<string, Operation> lastConstructiveTouch,
-        Dictionary<string, Operation> lastAnyTouch,
-        List<Conflict> conflicts,
-        HashSet<(Guid, Guid)> seenPairs,
-        HashSet<string> elementExistenceEmitted)
+    /// <summary>
+    /// Resolver hook: the winner-side net inserts competing for an anchor plus
+    /// every net insert transitively anchored behind them, in delta order.
+    /// Re-executing this closure re-asserts the winner's whole inserted
+    /// sequence at the anchor, which is what makes replicas converge.
+    /// </summary>
+    public static IReadOnlyList<Operation> AnchorGroupClosure(
+        IReadOnlyList<Operation> winnerDelta,
+        string elementId,
+        string propertyName,
+        string? anchorItemId)
     {
-        if (lifecycle.TryGetValue(child.ElementId, out var parentLifecycleOp))
+        var index = new DeltaIndex(winnerDelta);
+        var seeds = index.AnchorGroups.GetValueOrDefault(AnchorKey(elementId, propertyName, anchorItemId))
+                    ?? new List<Operation>();
+        return InsertClosure(index, seeds);
+    }
+
+    /// <summary>
+    /// Resolver hook: one dependent insert plus its transitive followers.
+    /// </summary>
+    public static IReadOnlyList<Operation> InsertChainClosure(
+        IReadOnlyList<Operation> delta,
+        Operation insert)
+    {
+        var index = new DeltaIndex(delta);
+        var net = index.NetKeyed.GetValueOrDefault(KeyOf(insert));
+        var seed = net is { Type: OperationType.InsertListItem } ? net : insert;
+        return InsertClosure(index, new List<Operation> { seed });
+    }
+
+    private static IReadOnlyList<Operation> InsertClosure(DeltaIndex index, List<Operation> seeds)
+    {
+        if (seeds.Count == 0)
         {
-            if (!seenPairs.Add((parentLifecycleOp.Id, child.Id)))
-            {
-                return;
-            }
-
-            if (parentLifecycleOp.Type == OperationType.DeleteElement)
-            {
-                conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Ddc,
-                    ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parentLifecycleOp, child,
-                    requiresResolution: false, ElementKey(child.ElementId)));
-            }
-            else
-            {
-                // Parent (re)created the element, child deleted it.
-                conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Mdc,
-                    ConflictSeverity.Real, ResolutionPolicy.Choose, parentLifecycleOp, child,
-                    requiresResolution: true, ElementKey(child.ElementId)));
-            }
-
-            return;
+            return Array.Empty<Operation>();
         }
 
-        if (lastConstructiveTouch.TryGetValue(child.ElementId, out var parentModify))
+        var collected = new List<Operation>(seeds);
+        var itemIds = new HashSet<string>(seeds.Select(op => op.ItemId!), StringComparer.Ordinal);
+
+        var changed = true;
+        while (changed)
         {
-            if (seenPairs.Add((parentModify.Id, child.Id)))
+            changed = false;
+            // Followers are found among all last inserts (including inserts of
+            // removed items): re-executing a tombstoned insert is harmless and
+            // keeps the chain behind it normalizable.
+            foreach (var op in index.LastInsertPerItem.Values)
             {
-                conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Mdc,
-                    ConflictSeverity.Real, ResolutionPolicy.Choose, parentModify, child,
-                    requiresResolution: true, ElementKey(child.ElementId)));
-                elementExistenceEmitted.Add(child.ElementId);
+                if (op.ElementId == seeds[0].ElementId &&
+                    string.Equals(op.PropertyName, seeds[0].PropertyName, StringComparison.Ordinal) &&
+                    op.AfterItemId is not null &&
+                    itemIds.Contains(op.AfterItemId) &&
+                    itemIds.Add(op.ItemId!))
+                {
+                    collected.Add(op);
+                    changed = true;
+                }
             }
         }
-        else if (lastAnyTouch.TryGetValue(child.ElementId, out var parentDestructive))
+
+        // Re-execute in original delta order so anchors always exist when needed.
+        var order = new Dictionary<Guid, int>();
+        for (var i = 0; i < index.Delta.Count; i++)
         {
-            if (seenPairs.Add((parentDestructive.Id, child.Id)))
+            order[index.Delta[i].Id] = i;
+        }
+
+        return collected.OrderBy(op => order.GetValueOrDefault(op.Id, int.MaxValue)).ToList();
+    }
+
+    // ------------------------------------------------------------------------
+    // Element existence: one conflict per element, decided by NET states.
+    // ------------------------------------------------------------------------
+
+    private static void DetectElementExistence(DeltaIndex parent, DeltaIndex child, List<Conflict> conflicts)
+    {
+        var elements = new HashSet<string>(parent.NetElement.Keys, StringComparer.Ordinal);
+        elements.UnionWith(child.NetElement.Keys);
+
+        foreach (var elementId in elements.OrderBy(id => id, StringComparer.Ordinal))
+        {
+            var pOp = parent.NetElement.GetValueOrDefault(elementId);
+            var cOp = child.NetElement.GetValueOrDefault(elementId);
+            var key = ElementKey(elementId);
+
+            var pDeleted = pOp?.Type == OperationType.DeleteElement;
+            var cDeleted = cOp?.Type == OperationType.DeleteElement;
+
+            if (pOp is not null && cOp is not null)
             {
-                conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Mdc,
-                    ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parentDestructive, child,
-                    requiresResolution: false, ElementKey(child.ElementId)));
+                if (pDeleted && cDeleted)
+                {
+                    conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Ddc,
+                        ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, pOp, cOp, false, key));
+                }
+                else if (pDeleted) // child net-created/resurrected
+                {
+                    conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Dmc,
+                        ConflictSeverity.Real, ResolutionPolicy.Choose, pOp, cOp, true, key));
+                }
+                else if (cDeleted) // parent net-created/resurrected
+                {
+                    conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Mdc,
+                        ConflictSeverity.Real, ResolutionPolicy.Choose, pOp, cOp, true, key));
+                }
+                else
+                {
+                    var sameType = string.Equals(pOp.ElementTypeId, cOp.ElementTypeId, StringComparison.Ordinal);
+                    conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Mmc,
+                        sameType ? ConflictSeverity.Pseudo : ConflictSeverity.Real,
+                        sameType ? ResolutionPolicy.Ignore : ResolutionPolicy.Choose,
+                        pOp, cOp, !sameType, key));
+                }
+
+                continue;
             }
+
+            if (pDeleted)
+            {
+                // Parent deleted; the child's fate depends on its net property touches.
+                var (constructive, destructive) = child.NetTouch(elementId);
+                if (constructive is not null)
+                {
+                    conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Dmc,
+                        ConflictSeverity.Real, ResolutionPolicy.Choose, pOp!, constructive, true, key));
+                }
+                else if (destructive is not null)
+                {
+                    conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Dmc,
+                        ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, pOp!, destructive, false, key));
+                }
+            }
+            else if (cDeleted)
+            {
+                var (constructive, destructive) = parent.NetTouch(elementId);
+                if (constructive is not null)
+                {
+                    conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Mdc,
+                        ConflictSeverity.Real, ResolutionPolicy.Choose, constructive, cOp!, true, key));
+                }
+                else if (destructive is not null)
+                {
+                    conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Mdc,
+                        ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, destructive, cOp!, false, key));
+                }
+            }
+
+            // A one-sided net Create conflicts with nothing.
         }
     }
 
-    private static void DetectForChildCreate(
-        Operation child,
-        Dictionary<string, Operation> lifecycle,
-        List<Conflict> conflicts,
-        HashSet<(Guid, Guid)> seenPairs)
+    // ------------------------------------------------------------------------
+    // Keyed slots: single values, set members, map keys, list items.
+    // ------------------------------------------------------------------------
+
+    private static void DetectKeyedSlots(DeltaIndex parent, DeltaIndex child, List<Conflict> conflicts)
     {
-        if (!lifecycle.TryGetValue(child.ElementId, out var parentLifecycleOp) ||
-            !seenPairs.Add((parentLifecycleOp.Id, child.Id)))
+        foreach (var (key, cOp) in child.NetKeyed.OrderBy(p => p.Key, StringComparer.Ordinal))
         {
-            return;
-        }
-
-        if (parentLifecycleOp.Type == OperationType.DeleteElement)
-        {
-            // Parent deleted, child (re)created the same element.
-            conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Dmc,
-                ConflictSeverity.Real, ResolutionPolicy.Choose, parentLifecycleOp, child,
-                requiresResolution: true, ElementKey(child.ElementId)));
-        }
-        else
-        {
-            var sameType = string.Equals(parentLifecycleOp.ElementTypeId, child.ElementTypeId, StringComparison.Ordinal);
-            conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Mmc,
-                sameType ? ConflictSeverity.Pseudo : ConflictSeverity.Real,
-                sameType ? ResolutionPolicy.Ignore : ResolutionPolicy.Choose,
-                parentLifecycleOp, child,
-                requiresResolution: !sameType, ElementKey(child.ElementId)));
-        }
-    }
-
-    private static void DetectForChildPropertyOp(
-        Operation child,
-        Dictionary<string, Operation> lifecycle,
-        Dictionary<string, Operation> keyed,
-        List<Conflict> conflicts,
-        HashSet<(Guid, Guid)> seenPairs,
-        HashSet<string> elementExistenceEmitted)
-    {
-        // Parent deleted the element the child is editing.
-        if (lifecycle.TryGetValue(child.ElementId, out var parentLifecycleOp) &&
-            parentLifecycleOp.Type == OperationType.DeleteElement &&
-            !elementExistenceEmitted.Contains(child.ElementId) &&
-            seenPairs.Add((parentLifecycleOp.Id, child.Id)))
-        {
-            var constructive = child.IsConstructive;
-            conflicts.Add(NewConflict(ConflictCategory.ElementExistence, MergeConflictType.Dmc,
-                constructive ? ConflictSeverity.Real : ConflictSeverity.Pseudo,
-                constructive ? ResolutionPolicy.Choose : ResolutionPolicy.Ignore,
-                parentLifecycleOp, child,
-                requiresResolution: constructive, ElementKey(child.ElementId)));
-
-            if (constructive)
-            {
-                // Element existence is a binary decision — one conflict per element.
-                elementExistenceEmitted.Add(child.ElementId);
-            }
-        }
-
-        foreach (var (key, kind) in ProbeKeys(child))
-        {
-            if (!keyed.TryGetValue(key, out var parentOp))
+            if (!parent.NetKeyed.TryGetValue(key, out var pOp))
             {
                 continue;
             }
 
-            var conflict = ClassifyKeyedPair(parentOp, child, kind, key);
-            if (conflict is null)
+            // Property changes on an element whose net fate is decided by an
+            // element-existence conflict are governed there ("property changes
+            // are always applied; the resolution only controls existence").
+            if (IsNetDeleted(parent, cOp.ElementId) || IsNetDeleted(child, cOp.ElementId))
             {
                 continue;
             }
 
-            if (seenPairs.Add((parentOp.Id, child.Id)))
+            var conflict = key[0] switch
+            {
+                '1' => ClassifySingle(pOp, cOp, key),
+                '2' => ClassifySet(pOp, cOp, key),
+                '3' => ClassifyMap(pOp, cOp, key),
+                '4' => ClassifyListItem(pOp, cOp, key),
+                _ => null
+            };
+
+            if (conflict is not null)
             {
                 conflicts.Add(conflict);
             }
         }
     }
 
-    private static IEnumerable<string> RegistrationKeys(Operation op)
-    {
-        switch (op.Type)
-        {
-            case OperationType.SetProperty:
-            case OperationType.UnsetProperty:
-                yield return SingleKey(op);
-                break;
-            case OperationType.AddSetItem:
-            case OperationType.RemoveSetItem:
-                yield return SetKey(op);
-                break;
-            case OperationType.PutMapEntry:
-            case OperationType.RemoveMapEntry:
-                yield return MapKey(op);
-                break;
-            case OperationType.InsertListItem:
-                yield return ListNodeKey(op, op.ItemId!);
-                yield return ListAnchorKey(op, op.AfterItemId);
-                break;
-            case OperationType.RemoveListItem:
-                yield return ListNodeKey(op, op.ItemId!);
-                break;
-        }
-    }
-
-    private static IEnumerable<(string Key, ProbeKind Kind)> ProbeKeys(Operation op)
-    {
-        switch (op.Type)
-        {
-            case OperationType.SetProperty:
-            case OperationType.UnsetProperty:
-                yield return (SingleKey(op), ProbeKind.Single);
-                break;
-            case OperationType.AddSetItem:
-            case OperationType.RemoveSetItem:
-                yield return (SetKey(op), ProbeKind.Set);
-                break;
-            case OperationType.PutMapEntry:
-            case OperationType.RemoveMapEntry:
-                yield return (MapKey(op), ProbeKind.Map);
-                break;
-            case OperationType.InsertListItem:
-                // Same item touched on the parent side (insert/insert or remove of this item).
-                yield return (ListNodeKey(op, op.ItemId!), ProbeKind.ListNode);
-                // Competing insert at the same anchor.
-                yield return (ListAnchorKey(op, op.AfterItemId), ProbeKind.ListAnchor);
-                // The anchor of this insert was removed by the parent.
-                if (op.AfterItemId is not null)
-                {
-                    yield return (ListNodeKey(op, op.AfterItemId), ProbeKind.ListAnchorRemovedByParent);
-                }
-
-                break;
-            case OperationType.RemoveListItem:
-                yield return (ListNodeKey(op, op.ItemId!), ProbeKind.ListNode);
-                // The parent inserted something anchored on the item the child removes.
-                yield return (ListAnchorKey(op, op.ItemId), ProbeKind.ListAnchorRemovedByChild);
-                break;
-        }
-    }
-
-    private static Conflict? ClassifyKeyedPair(Operation parent, Operation child, ProbeKind kind, string key) => kind switch
-    {
-        ProbeKind.Single => ClassifySingle(parent, child, key),
-        ProbeKind.Set => ClassifySet(parent, child, key),
-        ProbeKind.Map => ClassifyMap(parent, child, key),
-        ProbeKind.ListNode => ClassifyListNode(parent, child, key),
-        ProbeKind.ListAnchor => ClassifyListAnchor(parent, child, key),
-        ProbeKind.ListAnchorRemovedByParent => parent.Type == OperationType.RemoveListItem
-            ? NewConflict(ConflictCategory.ListAnchorDeleted, MergeConflictType.Dmc,
-                ConflictSeverity.Real, ResolutionPolicy.Merge, parent, child,
-                requiresResolution: true, key)
-            : null,
-        ProbeKind.ListAnchorRemovedByChild => parent.Type == OperationType.InsertListItem
-            ? NewConflict(ConflictCategory.ListAnchorDeleted, MergeConflictType.Mdc,
-                ConflictSeverity.Real, ResolutionPolicy.Merge, parent, child,
-                requiresResolution: true, key)
-            : null,
-        _ => null
-    };
+    private static bool IsNetDeleted(DeltaIndex side, string elementId) =>
+        side.NetElement.GetValueOrDefault(elementId)?.Type == OperationType.DeleteElement;
 
     private static Conflict? ClassifySingle(Operation parent, Operation child, string key)
     {
@@ -314,26 +355,18 @@ public static class ConflictDetector
             return NewConflict(ConflictCategory.SingleValue, MergeConflictType.Mmc,
                 equal ? ConflictSeverity.Pseudo : ConflictSeverity.Real,
                 equal ? ResolutionPolicy.Ignore : ResolutionPolicy.Choose,
-                parent, child, requiresResolution: !equal, key);
+                parent, child, !equal, key);
         }
 
-        if (parentSets && !childSets)
+        if (parentSets != childSets)
         {
-            return NewConflict(ConflictCategory.SingleValue, MergeConflictType.Mdc,
-                ConflictSeverity.Real, ResolutionPolicy.Choose, parent, child,
-                requiresResolution: true, key);
-        }
-
-        if (!parentSets && childSets)
-        {
-            return NewConflict(ConflictCategory.SingleValue, MergeConflictType.Dmc,
-                ConflictSeverity.Real, ResolutionPolicy.Choose, parent, child,
-                requiresResolution: true, key);
+            return NewConflict(ConflictCategory.SingleValue,
+                parentSets ? MergeConflictType.Mdc : MergeConflictType.Dmc,
+                ConflictSeverity.Real, ResolutionPolicy.Choose, parent, child, true, key);
         }
 
         return NewConflict(ConflictCategory.SingleValue, MergeConflictType.Ddc,
-            ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child,
-            requiresResolution: false, key);
+            ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child, false, key);
     }
 
     private static Conflict? ClassifySet(Operation parent, Operation child, string key)
@@ -343,20 +376,17 @@ public static class ConflictDetector
 
         if (parentAdds == childAdds)
         {
-            // Add/Add or Remove/Remove of the same member: identical outcome.
             return NewConflict(ConflictCategory.SetMembership,
                 parentAdds ? MergeConflictType.Mmc : MergeConflictType.Ddc,
-                ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child,
-                requiresResolution: false, key);
+                ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child, false, key);
         }
 
-        // Add vs Remove of the same member: never a true conflict (preconditions are
-        // mutually exclusive) but non-commutative, so a resolution operation is
-        // required for convergence.
+        // Add vs Remove of the same member: never a true conflict (preconditions
+        // are mutually exclusive) but non-commutative, so a resolution operation
+        // is required for convergence.
         return NewConflict(ConflictCategory.SetMembership,
             parentAdds ? MergeConflictType.Mdc : MergeConflictType.Dmc,
-            ConflictSeverity.Pseudo, ResolutionPolicy.Merge, parent, child,
-            requiresResolution: true, key);
+            ConflictSeverity.Pseudo, ResolutionPolicy.Merge, parent, child, true, key);
     }
 
     private static Conflict? ClassifyMap(Operation parent, Operation child, string key)
@@ -370,23 +400,22 @@ public static class ConflictDetector
             return NewConflict(ConflictCategory.MapEntry, MergeConflictType.Mmc,
                 equal ? ConflictSeverity.Pseudo : ConflictSeverity.Real,
                 equal ? ResolutionPolicy.Ignore : ResolutionPolicy.Choose,
-                parent, child, requiresResolution: !equal, key);
+                parent, child, !equal, key);
         }
 
         if (parentPuts != childPuts)
         {
             return NewConflict(ConflictCategory.MapEntry,
                 parentPuts ? MergeConflictType.Mdc : MergeConflictType.Dmc,
-                ConflictSeverity.Real, ResolutionPolicy.Choose, parent, child,
-                requiresResolution: true, key);
+                ConflictSeverity.Real, ResolutionPolicy.Choose, parent, child, true, key);
         }
 
         return NewConflict(ConflictCategory.MapEntry, MergeConflictType.Ddc,
-            ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child,
-            requiresResolution: false, key);
+            ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child, false, key);
     }
 
-    private static Conflict? ClassifyListNode(Operation parent, Operation child, string key)
+    /// <summary>Both sides netted an operation on the SAME list item.</summary>
+    private static Conflict? ClassifyListItem(Operation parent, Operation child, string key)
     {
         var parentInserts = parent.Type == OperationType.InsertListItem;
         var childInserts = child.Type == OperationType.InsertListItem;
@@ -394,45 +423,122 @@ public static class ConflictDetector
         if (parentInserts && childInserts)
         {
             var sameAnchor = string.Equals(parent.AfterItemId, child.AfterItemId, StringComparison.Ordinal);
+            var sameValue = Equals(parent.Value, child.Value);
+            if (sameAnchor && sameValue)
+            {
+                return NewConflict(ConflictCategory.ListOrder, MergeConflictType.Mmc,
+                    ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child, false, key);
+            }
+
+            // Same item placed or valued differently: a binary choice.
             return NewConflict(ConflictCategory.ListOrder, MergeConflictType.Mmc,
-                sameAnchor ? ConflictSeverity.Pseudo : ConflictSeverity.Real,
-                sameAnchor ? ResolutionPolicy.Ignore : ResolutionPolicy.Choose,
-                parent, child, requiresResolution: !sameAnchor, key);
+                ConflictSeverity.Real, ResolutionPolicy.Choose, parent, child, true, key);
         }
 
         if (parentInserts != childInserts)
         {
-            // Insert/move vs remove of the same item: delete always wins for list
-            // items and the pair is commutative under tombstone semantics.
+            // Insert/move vs remove of the same item: delete always wins and the
+            // pair is commutative under tombstone semantics.
             return NewConflict(ConflictCategory.ListOrder,
                 parentInserts ? MergeConflictType.Mdc : MergeConflictType.Dmc,
-                ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child,
-                requiresResolution: false, key);
+                ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child, false, key);
         }
 
         return NewConflict(ConflictCategory.ListOrder, MergeConflictType.Ddc,
-            ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child,
-            requiresResolution: false, key);
+            ConflictSeverity.Pseudo, ResolutionPolicy.Ignore, parent, child, false, key);
     }
 
-    private static Conflict? ClassifyListAnchor(Operation parent, Operation child, string key)
+    // ------------------------------------------------------------------------
+    // List anchors: competing inserts, deleted anchors, moved anchors.
+    // ------------------------------------------------------------------------
+
+    private static void DetectListAnchors(DeltaIndex parent, DeltaIndex child, List<Conflict> conflicts)
     {
-        if (parent.Type != OperationType.InsertListItem || child.Type != OperationType.InsertListItem)
+        // 1) Competing inserts at the same anchor (different items).
+        foreach (var (key, childGroup) in child.AnchorGroups.OrderBy(p => p.Key, StringComparer.Ordinal))
         {
-            return null;
+            if (!parent.AnchorGroups.TryGetValue(key, out var parentGroup))
+            {
+                continue;
+            }
+
+            var pOp = parentGroup[^1];
+            var cOp = childGroup[^1];
+            if (string.Equals(pOp.ItemId, cOp.ItemId, StringComparison.Ordinal))
+            {
+                continue; // same item — handled as a list-item conflict
+            }
+
+            if (SkipForNetDeleted(parent, child, cOp.ElementId))
+            {
+                continue;
+            }
+
+            conflicts.Add(NewConflict(ConflictCategory.ListOrder, MergeConflictType.Mmc,
+                ConflictSeverity.Real, ResolutionPolicy.Choose, pOp, cOp, true, key));
         }
 
-        if (string.Equals(parent.ItemId, child.ItemId, StringComparison.Ordinal))
-        {
-            // Identical insert — already covered by the node probe.
-            return null;
-        }
-
-        // Two different items inserted at the same anchor: a binary ordering choice.
-        return NewConflict(ConflictCategory.ListOrder, MergeConflictType.Mmc,
-            ConflictSeverity.Real, ResolutionPolicy.Choose, parent, child,
-            requiresResolution: true, key);
+        // 2) Child inserts whose anchor item the parent net-removed (anchor
+        //    deleted) or net-moved (anchor moved): the insert must follow its
+        //    anchor's fate. And the mirror for parent inserts.
+        DetectAnchorDependencies(parent, child, conflicts, childSide: true);
+        DetectAnchorDependencies(child, parent, conflicts, childSide: false);
     }
+
+    /// <summary>
+    /// Finds inserts of <paramref name="dependents"/> whose anchor item was
+    /// net-removed or net-moved on the <paramref name="anchorOwners"/> side.
+    /// </summary>
+    private static void DetectAnchorDependencies(
+        DeltaIndex anchorOwners,
+        DeltaIndex dependents,
+        List<Conflict> conflicts,
+        bool childSide)
+    {
+        foreach (var op in dependents.NetKeyed.Values
+                     .Where(op => op.Type == OperationType.InsertListItem && op.AfterItemId is not null)
+                     .OrderBy(op => op.Id))
+        {
+            var anchorItemKey = ListItemKey(op.ElementId, op.PropertyName!, op.AfterItemId!);
+            if (!anchorOwners.NetKeyed.TryGetValue(anchorItemKey, out var anchorOp))
+            {
+                continue;
+            }
+
+            if (SkipForNetDeleted(anchorOwners, dependents, op.ElementId))
+            {
+                continue;
+            }
+
+            if (anchorOp.Type == OperationType.RemoveListItem)
+            {
+                conflicts.Add(childSide
+                    ? NewConflict(ConflictCategory.ListAnchorDeleted, MergeConflictType.Dmc,
+                        ConflictSeverity.Real, ResolutionPolicy.Merge, anchorOp, op, true,
+                        AnchorKey(op.ElementId, op.PropertyName!, op.AfterItemId))
+                    : NewConflict(ConflictCategory.ListAnchorDeleted, MergeConflictType.Mdc,
+                        ConflictSeverity.Real, ResolutionPolicy.Merge, op, anchorOp, true,
+                        AnchorKey(op.ElementId, op.PropertyName!, op.AfterItemId)));
+            }
+            else if (anchorOp.Type == OperationType.InsertListItem)
+            {
+                // The anchor item itself was moved concurrently; the dependent
+                // insert must be re-executed to follow it.
+                conflicts.Add(childSide
+                    ? NewConflict(ConflictCategory.ListAnchorMoved, MergeConflictType.Mmc,
+                        ConflictSeverity.Real, ResolutionPolicy.Merge, anchorOp, op, true,
+                        AnchorKey(op.ElementId, op.PropertyName!, op.AfterItemId))
+                    : NewConflict(ConflictCategory.ListAnchorMoved, MergeConflictType.Mmc,
+                        ConflictSeverity.Real, ResolutionPolicy.Merge, op, anchorOp, true,
+                        AnchorKey(op.ElementId, op.PropertyName!, op.AfterItemId)));
+            }
+        }
+    }
+
+    private static bool SkipForNetDeleted(DeltaIndex a, DeltaIndex b, string elementId) =>
+        IsNetDeleted(a, elementId) || IsNetDeleted(b, elementId);
+
+    // ------------------------------------------------------------------------
 
     private static Conflict NewConflict(
         ConflictCategory category,
@@ -454,10 +560,24 @@ public static class ConflictDetector
         ConflictKey = conflictKey
     };
 
+    private static string KeyOf(Operation op) => op.Type switch
+    {
+        OperationType.SetProperty or OperationType.UnsetProperty =>
+            $"1|{op.ElementId}|{op.PropertyName}",
+        OperationType.AddSetItem or OperationType.RemoveSetItem =>
+            $"2|{op.ElementId}|{op.PropertyName}|{op.Value!.MembershipKey}",
+        OperationType.PutMapEntry or OperationType.RemoveMapEntry =>
+            $"3|{op.ElementId}|{op.PropertyName}|{op.MapKey}",
+        OperationType.InsertListItem or OperationType.RemoveListItem =>
+            ListItemKey(op.ElementId, op.PropertyName!, op.ItemId!),
+        _ => throw new InvalidOperationException($"No conflict key for {op.Type}.")
+    };
+
     private static string ElementKey(string elementId) => $"element|{elementId}";
-    private static string SingleKey(Operation op) => $"single|{op.ElementId}|{op.PropertyName}";
-    private static string SetKey(Operation op) => $"set|{op.ElementId}|{op.PropertyName}|{op.Value!.MembershipKey}";
-    private static string MapKey(Operation op) => $"map|{op.ElementId}|{op.PropertyName}|{op.MapKey}";
-    private static string ListNodeKey(Operation op, string itemId) => $"listnode|{op.ElementId}|{op.PropertyName}|{itemId}";
-    private static string ListAnchorKey(Operation op, string? anchor) => $"listanchor|{op.ElementId}|{op.PropertyName}|{anchor ?? "<head>"}";
+
+    private static string ListItemKey(string elementId, string propertyName, string itemId) =>
+        $"4|{elementId}|{propertyName}|{itemId}";
+
+    private static string AnchorKey(string elementId, string propertyName, string? anchor) =>
+        $"anchor|{elementId}|{propertyName}|{anchor ?? "<head>"}";
 }

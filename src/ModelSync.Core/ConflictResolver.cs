@@ -4,7 +4,7 @@ namespace ModelSync.Core;
 /// Deterministic, rule-based conflict resolution. Resolutions are expressed as
 /// new operations appended to the updating workspace's branch; replaying them
 /// re-asserts the winning outcome on every replica, which is what makes all
-/// models converge to the same state.
+/// models converge.
 /// </summary>
 public static class ConflictResolver
 {
@@ -13,9 +13,9 @@ public static class ConflictResolver
     /// conflict needs none (pseudo conflicts with commutative outcomes).
     /// <paramref name="childModel"/> must already contain the merged state
     /// (child delta plus public delta) so list re-anchoring can consult it.
-    /// The deltas are needed for list-order conflicts: the winning insert is
-    /// re-executed together with the follower chain anchored behind it, so the
-    /// whole inserted sequence keeps its relative order on every replica.
+    /// The deltas are needed for list conflicts: the winning inserts are
+    /// re-executed together with every insert transitively anchored behind
+    /// them, so whole inserted sequences keep their relative order everywhere.
     /// </summary>
     public static IReadOnlyList<Operation> CreateResolutions(
         Conflict conflict,
@@ -32,67 +32,21 @@ public static class ConflictResolver
 
         switch (conflict.Category)
         {
-            case ConflictCategory.ListAnchorDeleted:
-            {
-                var resolution = ReanchorInsert(conflict, childModel, workspaceId);
-                return resolution is null ? Array.Empty<Operation>() : new[] { resolution };
-            }
-
             case ConflictCategory.ElementExistence:
                 return new[] { ResolveElementExistence(conflict, strategy, childModel, workspaceId) };
 
-            case ConflictCategory.ListOrder:
-            {
-                var winner = Winner(conflict, strategy);
-                if (winner.Type != OperationType.InsertListItem)
-                {
-                    return new[] { winner.CloneAsResolution(workspaceId) };
-                }
+            case ConflictCategory.ListAnchorDeleted:
+                return ResolveAnchorDeleted(conflict, childModel, workspaceId, parentDelta, childDelta);
 
-                var winnerDelta = strategy == ResolutionStrategy.ChildWins ? childDelta : parentDelta;
-                return CollectInsertChain(winner, winnerDelta)
-                    .Select(op => op.CloneAsResolution(workspaceId))
-                    .ToList();
-            }
+            case ConflictCategory.ListAnchorMoved:
+                return ResolveAnchorMoved(conflict, workspaceId, parentDelta, childDelta);
+
+            case ConflictCategory.ListOrder:
+                return ResolveListOrder(conflict, strategy, workspaceId, parentDelta, childDelta);
 
             default:
                 return new[] { Winner(conflict, strategy).CloneAsResolution(workspaceId) };
         }
-    }
-
-    /// <summary>
-    /// The winning insert plus every insert of the same delta transitively
-    /// anchored behind it ("clone the sequence that follows the conflicting
-    /// item"), in chain order.
-    /// </summary>
-    private static List<Operation> CollectInsertChain(Operation winner, IReadOnlyList<Operation> winnerDelta)
-    {
-        var chain = new List<Operation> { winner };
-        var seen = new HashSet<string> { winner.ItemId! };
-        var lastItemId = winner.ItemId;
-
-        var found = true;
-        while (found)
-        {
-            found = false;
-            foreach (var op in winnerDelta)
-            {
-                if (op.Type == OperationType.InsertListItem &&
-                    op.ElementId == winner.ElementId &&
-                    string.Equals(op.PropertyName, winner.PropertyName, StringComparison.Ordinal) &&
-                    string.Equals(op.AfterItemId, lastItemId, StringComparison.Ordinal) &&
-                    op.ItemId is not null &&
-                    seen.Add(op.ItemId))
-                {
-                    chain.Add(op);
-                    lastItemId = op.ItemId;
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        return chain;
     }
 
     private static Operation Winner(Conflict conflict, ResolutionStrategy strategy) =>
@@ -141,24 +95,55 @@ public static class ConflictResolver
     }
 
     /// <summary>
-    /// Insert-after-deleted has no binary choice: the insert is kept and
-    /// re-anchored onto the closest surviving predecessor, so the final list
-    /// state no longer depends on the tombstoned anchor.
+    /// Competing inserts (same anchor, or the same item placed differently):
+    /// re-execute the winner side's inserts at the anchor together with their
+    /// transitive follower chains, in the winner delta's order.
     /// </summary>
-    private static Operation? ReanchorInsert(Conflict conflict, ModelState childModel, string workspaceId)
+    private static IReadOnlyList<Operation> ResolveListOrder(
+        Conflict conflict,
+        ResolutionStrategy strategy,
+        string workspaceId,
+        IReadOnlyList<Operation> parentDelta,
+        IReadOnlyList<Operation> childDelta)
     {
-        var insert = conflict.ParentOperation.Type == OperationType.InsertListItem
-            ? conflict.ParentOperation
-            : conflict.ChildOperation;
+        var winner = Winner(conflict, strategy);
+        var winnerDelta = strategy == ResolutionStrategy.ChildWins ? childDelta : parentDelta;
 
-        if (insert.Type != OperationType.InsertListItem)
+        if (winner.Type != OperationType.InsertListItem)
         {
-            return null;
+            return new[] { winner.CloneAsResolution(workspaceId) };
+        }
+
+        var closure = conflict.ConflictKey.StartsWith("anchor|", StringComparison.Ordinal)
+            ? ConflictDetector.AnchorGroupClosure(winnerDelta, winner.ElementId, winner.PropertyName!, winner.AfterItemId)
+            : ConflictDetector.InsertChainClosure(winnerDelta, winner);
+
+        return closure.Count == 0
+            ? new[] { winner.CloneAsResolution(workspaceId) }
+            : closure.Select(op => op.CloneAsResolution(workspaceId)).ToList();
+    }
+
+    /// <summary>
+    /// Insert-after-deleted has no binary choice: the dependent insert is kept
+    /// and re-anchored onto the closest surviving predecessor; its follower
+    /// chain is re-executed behind it.
+    /// </summary>
+    private static IReadOnlyList<Operation> ResolveAnchorDeleted(
+        Conflict conflict,
+        ModelState childModel,
+        string workspaceId,
+        IReadOnlyList<Operation> parentDelta,
+        IReadOnlyList<Operation> childDelta)
+    {
+        var (dependent, dependentDelta) = DependentInsert(conflict, parentDelta, childDelta);
+        if (dependent is null)
+        {
+            return Array.Empty<Operation>();
         }
 
         var property = childModel
-            .GetElementIncludingDeleted(insert.ElementId)?
-            .GetProperty(insert.PropertyName!);
+            .GetElementIncludingDeleted(dependent.ElementId)?
+            .GetProperty(dependent.PropertyName!);
 
         string? newAnchor = null;
         if (property is not null)
@@ -166,20 +151,75 @@ public static class ConflictResolver
             // The inserted node already sits right after the tombstoned anchor in
             // the merged state; its closest alive predecessor is the position-
             // preserving replacement anchor.
-            newAnchor = property.FindNode(insert.ItemId!) is not null
-                ? property.FirstAlivePredecessor(insert.ItemId!)
-                : insert.AfterItemId is not null
-                    ? property.FirstAlivePredecessor(insert.AfterItemId)
+            newAnchor = property.FindNode(dependent.ItemId!) is not null
+                ? property.FirstAlivePredecessor(dependent.ItemId!)
+                : dependent.AfterItemId is not null
+                    ? property.FirstAlivePredecessor(dependent.AfterItemId)
                     : null;
         }
 
-        return insert with
+        var closure = ConflictDetector.InsertChainClosure(dependentDelta, dependent);
+        var result = new List<Operation>();
+        foreach (var op in closure)
         {
-            Id = Guid.NewGuid(),
-            WorkspaceId = workspaceId,
-            AfterItemId = newAnchor,
-            IsResolution = true,
-            Timestamp = DateTimeOffset.UtcNow
-        };
+            var clone = op.CloneAsResolution(workspaceId);
+            if (string.Equals(op.ItemId, dependent.ItemId, StringComparison.Ordinal))
+            {
+                clone = clone with { AfterItemId = newAnchor };
+            }
+
+            result.Add(clone);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The anchor item was moved concurrently: re-execute the dependent insert
+    /// (and its followers) so it follows the anchor's new position. There is no
+    /// choice to make; the resolution is strategy-independent.
+    /// </summary>
+    private static IReadOnlyList<Operation> ResolveAnchorMoved(
+        Conflict conflict,
+        string workspaceId,
+        IReadOnlyList<Operation> parentDelta,
+        IReadOnlyList<Operation> childDelta)
+    {
+        var (dependent, dependentDelta) = DependentInsert(conflict, parentDelta, childDelta);
+        if (dependent is null)
+        {
+            return Array.Empty<Operation>();
+        }
+
+        return ConflictDetector.InsertChainClosure(dependentDelta, dependent)
+            .Select(op => op.CloneAsResolution(workspaceId))
+            .ToList();
+    }
+
+    /// <summary>
+    /// The dependent insert of an anchor conflict is the insert whose anchor is
+    /// the other side's item (the removed or moved one).
+    /// </summary>
+    private static (Operation? Dependent, IReadOnlyList<Operation> Delta) DependentInsert(
+        Conflict conflict,
+        IReadOnlyList<Operation> parentDelta,
+        IReadOnlyList<Operation> childDelta)
+    {
+        var parentOp = conflict.ParentOperation;
+        var childOp = conflict.ChildOperation;
+
+        if (childOp.Type == OperationType.InsertListItem &&
+            string.Equals(childOp.AfterItemId, parentOp.ItemId, StringComparison.Ordinal))
+        {
+            return (childOp, childDelta);
+        }
+
+        if (parentOp.Type == OperationType.InsertListItem &&
+            string.Equals(parentOp.AfterItemId, childOp.ItemId, StringComparison.Ordinal))
+        {
+            return (parentOp, parentDelta);
+        }
+
+        return (null, childDelta);
     }
 }

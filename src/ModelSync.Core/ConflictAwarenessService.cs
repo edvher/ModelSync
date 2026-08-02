@@ -16,7 +16,7 @@ public sealed class ConflictAwarenessService
     private readonly object _gate = new();
     private readonly Dictionary<(string, string), CacheEntry> _cache = new();
 
-    private sealed record CacheEntry(Guid HeadA, Guid HeadB, IReadOnlyList<Conflict> Conflicts);
+    private sealed record CacheEntry(Guid HeadA, Guid HeadB, Guid BranchingPoint, IReadOnlyList<Conflict> Conflicts);
 
     public ConflictAwarenessService(ModelService service)
     {
@@ -46,18 +46,22 @@ public sealed class ConflictAwarenessService
 
         lock (_gate)
         {
+            // An update can re-attach a branch without moving either head, which
+            // shifts the branching point — so the LCA is part of the cache key.
+            var branchingPoint = tree.Lca(workspaceA, workspaceB);
+
             var key = (workspaceA, workspaceB);
-            if (_cache.TryGetValue(key, out var entry) && entry.HeadA == headA && entry.HeadB == headB)
+            if (_cache.TryGetValue(key, out var entry) &&
+                entry.HeadA == headA && entry.HeadB == headB && entry.BranchingPoint == branchingPoint)
             {
                 return entry.Conflicts;
             }
 
-            var branchingPoint = tree.Lca(workspaceA, workspaceB);
             var deltaA = tree.PathBetween(branchingPoint, headA);
             var deltaB = tree.PathBetween(branchingPoint, headB);
             var conflicts = ConflictDetector.Detect(deltaA, deltaB);
 
-            _cache[key] = new CacheEntry(headA, headB, conflicts);
+            _cache[key] = new CacheEntry(headA, headB, branchingPoint, conflicts);
             return conflicts;
         }
     }

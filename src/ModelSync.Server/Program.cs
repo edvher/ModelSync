@@ -28,6 +28,15 @@ _ = app.Services.GetRequiredService<OperationHub>();
 app.MapGrpcService<ModelSyncGrpcService>();
 app.MapDashboard();
 
+// Optional demo scenario so a fresh server shows a meaningful operation tree.
+// Opt-in only (never triggered by dashboard rendering) and seeded through the
+// regular checkout/apply/commit API so branch heads stay consistent.
+if (args.Contains("--seed-demo") ||
+    Environment.GetEnvironmentVariable("MODELSYNC_SEED_DEMO") is "1" or "true")
+{
+    DemoDataSeeder.Seed(app.Services.GetRequiredService<ModelService>());
+}
+
 app.Run();
 
 // Exposed for in-process end-to-end tests (WebApplicationFactory).
