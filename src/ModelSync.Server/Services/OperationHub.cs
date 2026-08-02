@@ -1,34 +1,54 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using ModelSync.Core;
 
 namespace ModelSync.Server.Services;
 
-public class OperationHub
+/// <summary>
+/// Fan-out of applied operations to streaming subscribers, per workspace
+/// branch. Wired to <see cref="ModelService.OperationsApplied"/>.
+/// </summary>
+public sealed class OperationHub
 {
-    private readonly ConcurrentDictionary<string, Channel<Operation>> _channels = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<Operation>>> _subscribers = new(StringComparer.Ordinal);
 
-    public IAsyncEnumerable<Operation> Subscribe(string modelName, CancellationToken cancellationToken)
+    public OperationHub(ModelService service)
     {
-        var channel = _channels.GetOrAdd(modelName, _ => Channel.CreateUnbounded<Operation>());
-        return ReadAsync(channel.Reader, cancellationToken);
+        service.OperationsApplied += Publish;
     }
 
-    public void Publish(string modelName, Operation operation)
+    public void Publish(string workspaceId, IReadOnlyList<Operation> operations)
     {
-        var channel = _channels.GetOrAdd(modelName, _ => Channel.CreateUnbounded<Operation>());
-        channel.Writer.TryWrite(operation);
-    }
-
-    private static async IAsyncEnumerable<Operation> ReadAsync(ChannelReader<Operation> reader, [EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        while (await reader.WaitToReadAsync(cancellationToken))
+        if (!_subscribers.TryGetValue(workspaceId, out var channels))
         {
-            while (reader.TryRead(out var operation))
+            return;
+        }
+
+        foreach (var channel in channels.Values)
+        {
+            foreach (var operation in operations)
             {
-                yield return operation;
+                channel.Writer.TryWrite(operation);
             }
         }
+    }
+
+    public IDisposable Subscribe(string workspaceId, out ChannelReader<Operation> reader)
+    {
+        var channels = _subscribers.GetOrAdd(workspaceId, _ => new ConcurrentDictionary<Guid, Channel<Operation>>());
+        var subscriptionId = Guid.NewGuid();
+        var channel = Channel.CreateUnbounded<Operation>();
+        channels[subscriptionId] = channel;
+        reader = channel.Reader;
+        return new Subscription(() =>
+        {
+            channels.TryRemove(subscriptionId, out _);
+            channel.Writer.TryComplete();
+        });
+    }
+
+    private sealed class Subscription(Action dispose) : IDisposable
+    {
+        public void Dispose() => dispose();
     }
 }

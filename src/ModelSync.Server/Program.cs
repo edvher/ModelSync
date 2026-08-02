@@ -1,25 +1,34 @@
-using ModelSync.Server.Components;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using ModelSync.Core;
 using ModelSync.Server.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// The gRPC endpoint speaks HTTP/2 without TLS (h2c) on 5001; the dashboard is
+// plain HTTP/1.1 on 5000. Explicit URLs (tests, --urls) override this.
+if (builder.WebHost.GetSetting("urls") is null or "")
+{
+    builder.WebHost.ConfigureKestrel(kestrel =>
+    {
+        kestrel.ListenAnyIP(5000, listen => listen.Protocols = HttpProtocols.Http1);
+        kestrel.ListenAnyIP(5001, listen => listen.Protocols = HttpProtocols.Http2);
+    });
+}
+
 builder.Services.AddGrpc();
-builder.Services.AddRazorComponents()
-    .AddInteractiveServerComponents();
-builder.Services.AddSingleton<OperationTree>();
-builder.Services.AddSingleton<ModelManager>();
+builder.Services.AddSingleton<ModelService>();
+builder.Services.AddSingleton<ConflictAwarenessService>();
 builder.Services.AddSingleton<OperationHub>();
-builder.Services.AddSingleton<OperationDashboardService>();
 
 var app = builder.Build();
 
-app.MapStaticAssets();
-app.UseStaticFiles();
-app.MapRazorComponents<App>()
-    .AddInteractiveServerRenderMode();
+// Instantiate the hub eagerly so it observes operations from the start.
+_ = app.Services.GetRequiredService<OperationHub>();
 
 app.MapGrpcService<ModelSyncGrpcService>();
-app.MapGet("/health", () => "ModelSync gRPC server is running. Use a gRPC client to communicate.");
+app.MapDashboard();
 
 app.Run();
+
+// Exposed for in-process end-to-end tests (WebApplicationFactory).
+public partial class Program;

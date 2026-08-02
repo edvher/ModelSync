@@ -5,11 +5,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <Protobuf Include="../ModelSync.Server/Protos/modelsync.proto" GrpcServices="Client" Link="Protos/modelsync.proto" />
+    <Protobuf Include="../ModelSync.Server/Protos/modelsync.proto" GrpcServices="Client" Access="Internal" Link="Protos/modelsync.proto" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Grpc.Net.Client" Version="2.65.0" />
-    <PackageReference Include="Grpc.Tools" Version="2.65.0" PrivateAssets="All" />
-    <PackageReference Include="Google.Protobuf" Version="3.27.0" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.66.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.66.0" PrivateAssets="All" />
+    <PackageReference Include="Google.Protobuf" Version="3.28.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ModelSync.Core/ModelSync.Core.csproj" />
   </ItemGroup>
 </Project>

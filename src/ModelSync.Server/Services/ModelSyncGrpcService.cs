@@ -1,135 +1,142 @@
 using Grpc.Core;
 using ModelSync.Core;
-using ProtoOperationType = ModelSync.Server.OperationType;
-using ProtoValueKind = ModelSync.Server.ValueKind;
+using ModelSync.Protocol;
 
 namespace ModelSync.Server.Services;
 
-public class ModelSyncGrpcService : ModelSyncApi.ModelSyncApiBase
+/// <summary>The gRPC facade over the core <see cref="ModelService"/>.</summary>
+public sealed class ModelSyncGrpcService : ModelSyncService.ModelSyncServiceBase
 {
-    private readonly ModelManager _manager;
+    private readonly ModelService _service;
+    private readonly ConflictAwarenessService _awareness;
     private readonly OperationHub _hub;
 
-    public ModelSyncGrpcService(ModelManager manager, OperationHub hub)
+    public ModelSyncGrpcService(ModelService service, ConflictAwarenessService awareness, OperationHub hub)
     {
-        _manager = manager;
+        _service = service;
+        _awareness = awareness;
         _hub = hub;
     }
 
     public override Task<CheckoutResponse> Checkout(CheckoutRequest request, ServerCallContext context)
     {
-        _ = _manager.Checkout(request.ModelName);
-        var operations = _manager.Tree.GetAllOperations(request.ModelName)
-            .Select(ToMessage);
-
+        _service.Checkout(request.WorkspaceId);
         var response = new CheckoutResponse();
-        response.Operations.AddRange(operations);
+        response.Operations.AddRange(_service.History(request.WorkspaceId).Select(ProtoMapper.ToMessage));
         return Task.FromResult(response);
     }
 
-    public override Task<OperationAck> ApplyOperation(ApplyOperationRequest request, ServerCallContext context)
+    public override Task<ApplyResponse> Apply(ApplyRequest request, ServerCallContext context)
     {
-        var op = FromMessage(request.Operation, request.ModelName);
-        _manager.ApplyOperation(request.ModelName, op);
-        _hub.Publish(request.ModelName, op);
-        return Task.FromResult(new OperationAck { OperationId = op.Id.ToString() });
-    }
-
-    public override async Task SubscribeOperations(SubscribeRequest request, IServerStreamWriter<OperationEvent> responseStream, ServerCallContext context)
-    {
-        _ = _manager.Checkout(request.ModelName);
-        var existing = _manager.Tree.GetAllOperations(request.ModelName);
-        foreach (var op in existing)
+        try
         {
-            await responseStream.WriteAsync(new OperationEvent { Operation = ToMessage(op) });
+            var operation = ProtoMapper.ToOperation(request.Operation) with { WorkspaceId = request.WorkspaceId };
+            var applied = _service.Apply(request.WorkspaceId, operation);
+            return Task.FromResult(new ApplyResponse
+            {
+                Accepted = true,
+                Operation = ProtoMapper.ToMessage(applied)
+            });
         }
-
-        await foreach (var op in _hub.Subscribe(request.ModelName, context.CancellationToken))
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
-            await responseStream.WriteAsync(new OperationEvent { Operation = ToMessage(op) });
+            return Task.FromResult(new ApplyResponse { Accepted = false, Error = ex.Message });
         }
     }
 
-    private static OperationMessage ToMessage(Operation op)
+    public override Task<UpdateResponse> Update(UpdateRequest request, ServerCallContext context)
     {
-        return new OperationMessage
+        try
         {
-            Id = op.Id.ToString(),
-            ModelName = op.ModelName,
-            ElementId = op.ElementId,
-            ElementType = op.ElementType ?? string.Empty,
-            PropertyName = op.PropertyName ?? string.Empty,
-            AfterItemId = op.AfterItemId ?? string.Empty,
-            ItemId = op.ItemId ?? string.Empty,
-            MapKey = op.MapKey ?? string.Empty,
-            Value = op.NewValue?.Content ?? string.Empty,
-            ValueKind = MapToProtoValueKind(op.NewValue?.Kind ?? Core.ValueKind.String),
-            Type = MapToProtoOperationType(op.Type),
-            TimestampUnixMs = op.Timestamp.ToUnixTimeMilliseconds()
-        };
+            var result = _service.Update(request.WorkspaceId, (Core.ResolutionStrategy)(int)request.Strategy);
+            var response = new UpdateResponse { WasUpToDate = result.WasUpToDate };
+            response.PublicOperations.AddRange(result.PublicOperations.Select(ProtoMapper.ToMessage));
+            response.Conflicts.AddRange(result.Conflicts.Select(ProtoMapper.ToMessage));
+            response.ResolutionOperations.AddRange(result.ResolutionOperations.Select(ProtoMapper.ToMessage));
+            return Task.FromResult(response);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
     }
 
-    private static Operation FromMessage(OperationMessage message, string modelName)
+    public override Task<CommitResponse> Commit(CommitRequest request, ServerCallContext context)
     {
-        return new Operation(Guid.TryParse(message.Id, out var parsed) ? parsed : Guid.NewGuid(), MapToOperationType(message.Type))
+        try
         {
-            ModelName = modelName,
-            ElementId = message.ElementId,
-            ElementType = string.IsNullOrWhiteSpace(message.ElementType) ? null : message.ElementType,
-            PropertyName = string.IsNullOrWhiteSpace(message.PropertyName) ? null : message.PropertyName,
-            NewValue = new PropertyValue(MapToValueKind(message.ValueKind), string.IsNullOrEmpty(message.Value) ? null : message.Value),
-            AfterItemId = string.IsNullOrWhiteSpace(message.AfterItemId) ? null : message.AfterItemId,
-            ItemId = string.IsNullOrWhiteSpace(message.ItemId) ? null : message.ItemId,
-            MapKey = string.IsNullOrWhiteSpace(message.MapKey) ? null : message.MapKey,
-            Timestamp = DateTimeOffset.FromUnixTimeMilliseconds(message.TimestampUnixMs == 0 ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : message.TimestampUnixMs)
-        };
+            var result = _service.Commit(request.WorkspaceId);
+            var response = new CommitResponse
+            {
+                Success = result.Success,
+                Reason = result.Reason ?? string.Empty
+            };
+            response.CommittedOperations.AddRange(result.CommittedOperations.Select(ProtoMapper.ToMessage));
+            return Task.FromResult(response);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
     }
 
-    private static ProtoOperationType MapToProtoOperationType(ModelSync.Core.OperationType type) => type switch
+    public override async Task Subscribe(SubscribeRequest request, IServerStreamWriter<OperationEvent> responseStream, ServerCallContext context)
     {
-        ModelSync.Core.OperationType.CreateElement => ProtoOperationType.CreateElement,
-        ModelSync.Core.OperationType.DeleteElement => ProtoOperationType.DeleteElement,
-        ModelSync.Core.OperationType.SetProperty => ProtoOperationType.SetProperty,
-        ModelSync.Core.OperationType.AddToListProperty => ProtoOperationType.AddToListProperty,
-        ModelSync.Core.OperationType.RemoveFromListProperty => ProtoOperationType.RemoveFromListProperty,
-        ModelSync.Core.OperationType.AddToSetProperty => ProtoOperationType.AddToSetProperty,
-        ModelSync.Core.OperationType.RemoveFromSetProperty => ProtoOperationType.RemoveFromSetProperty,
-        ModelSync.Core.OperationType.UpdateMapEntry => ProtoOperationType.UpdateMapEntry,
-        ModelSync.Core.OperationType.RemoveMapEntry => ProtoOperationType.RemoveMapEntry,
-        _ => ProtoOperationType.None
-    };
+        _service.Checkout(request.WorkspaceId);
 
-    private static ModelSync.Core.OperationType MapToOperationType(ProtoOperationType type) => type switch
-    {
-        ProtoOperationType.CreateElement => ModelSync.Core.OperationType.CreateElement,
-        ProtoOperationType.DeleteElement => ModelSync.Core.OperationType.DeleteElement,
-        ProtoOperationType.SetProperty => ModelSync.Core.OperationType.SetProperty,
-        ProtoOperationType.AddToListProperty => ModelSync.Core.OperationType.AddToListProperty,
-        ProtoOperationType.RemoveFromListProperty => ModelSync.Core.OperationType.RemoveFromListProperty,
-        ProtoOperationType.AddToSetProperty => ModelSync.Core.OperationType.AddToSetProperty,
-        ProtoOperationType.RemoveFromSetProperty => ModelSync.Core.OperationType.RemoveFromSetProperty,
-        ProtoOperationType.UpdateMapEntry => ModelSync.Core.OperationType.UpdateMapEntry,
-        ProtoOperationType.RemoveMapEntry => ModelSync.Core.OperationType.RemoveMapEntry,
-        _ => ModelSync.Core.OperationType.None
-    };
+        // Register the live subscription before snapshotting the history so no
+        // operation can fall between replay and streaming; replayed operation
+        // ids are skipped when they arrive again through the channel.
+        using var subscription = _hub.Subscribe(request.WorkspaceId, out var reader);
 
-    private static ProtoValueKind MapToProtoValueKind(ModelSync.Core.ValueKind kind) => kind switch
-    {
-        ModelSync.Core.ValueKind.Integer => ProtoValueKind.Integer,
-        ModelSync.Core.ValueKind.Double => ProtoValueKind.Double,
-        ModelSync.Core.ValueKind.Boolean => ProtoValueKind.Boolean,
-        ModelSync.Core.ValueKind.Reference => ProtoValueKind.Reference,
-        ModelSync.Core.ValueKind.Json => ProtoValueKind.Json,
-        _ => ProtoValueKind.String
-    };
+        var replayed = new HashSet<Guid>();
+        if (!request.SkipReplay)
+        {
+            foreach (var operation in _service.History(request.WorkspaceId))
+            {
+                replayed.Add(operation.Id);
+                await responseStream.WriteAsync(new OperationEvent
+                {
+                    WorkspaceId = request.WorkspaceId,
+                    Operation = ProtoMapper.ToMessage(operation)
+                });
+            }
+        }
 
-    private static ModelSync.Core.ValueKind MapToValueKind(ProtoValueKind kind) => kind switch
+        try
+        {
+            await foreach (var operation in reader.ReadAllAsync(context.CancellationToken))
+            {
+                if (replayed.Count > 0 && replayed.Remove(operation.Id))
+                {
+                    continue;
+                }
+
+                await responseStream.WriteAsync(new OperationEvent
+                {
+                    WorkspaceId = request.WorkspaceId,
+                    Operation = ProtoMapper.ToMessage(operation)
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Client went away — normal end of a subscription.
+        }
+    }
+
+    public override Task<AwarenessResponse> GetAwarenessConflicts(AwarenessRequest request, ServerCallContext context)
     {
-        ProtoValueKind.Integer => ModelSync.Core.ValueKind.Integer,
-        ProtoValueKind.Double => ModelSync.Core.ValueKind.Double,
-        ProtoValueKind.Boolean => ModelSync.Core.ValueKind.Boolean,
-        ProtoValueKind.Reference => ModelSync.Core.ValueKind.Reference,
-        ProtoValueKind.Json => ModelSync.Core.ValueKind.Json,
-        _ => ModelSync.Core.ValueKind.String
-    };
+        var response = new AwarenessResponse();
+        response.Conflicts.AddRange(
+            _awareness.GetConflicts(request.WorkspaceA, request.WorkspaceB).Select(ProtoMapper.ToMessage));
+        return Task.FromResult(response);
+    }
+
+    public override Task<ListWorkspacesResponse> ListWorkspaces(ListWorkspacesRequest request, ServerCallContext context)
+    {
+        var response = new ListWorkspacesResponse();
+        response.WorkspaceIds.AddRange(_service.Workspaces.OrderBy(id => id, StringComparer.Ordinal));
+        return Task.FromResult(response);
+    }
 }
