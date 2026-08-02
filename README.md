@@ -60,6 +60,10 @@ dotnet run --project src/ModelSync.Server/ModelSync.Server.csproj
   awareness, auto-refreshing.
 - JSON APIs: `/api/tree`, `/api/workspaces`, `/api/model/{workspace}`,
   `/api/conflicts?a=P&b=A`, `/health`.
+- Optional demo scenario: start with `--seed-demo` (or `MODELSYNC_SEED_DEMO=1`)
+  to populate a fresh server with a public model, two diverging workspaces and
+  a brewing conflict — seeded through the regular workspace API at startup, so
+  it behaves exactly like real client activity.
 
 ## Using the SDK
 
@@ -111,10 +115,17 @@ below their branching point, keyed per property semantics:
 | Map entry | element + property + key | different values for the same key, put vs remove | winner re-executed |
 | List order | element + property + anchor / item id | two inserts at the same anchor, or the same item at different anchors | winner's insert **and its follower chain** re-executed (the winner ends up first) |
 | List anchor deleted | insert whose anchor was removed concurrently | always | algorithmic, no choice: insert re-anchored to the closest alive predecessor |
+| List anchor moved | insert whose anchor item was moved concurrently | always | algorithmic, no choice: the dependent insert (and its followers) re-executed so it follows the anchor |
 
 Strategies: `ChildWins` (default — the updating workspace) or `ParentWins`
 (the public side). Pseudo conflicts (identical outcomes, delete-delete, …)
 are reported for awareness but need no resolution.
+
+Detection classifies each branch by its **net effect** — the last surviving
+operation per element, property slot, set member, map key and list item — so
+superseded intermediate steps ("set then unset", "insert then remove", a move
+of the same item) never produce phantom conflicts, matching the thesis rule
+*Delete ≙ (Modify\*) Delete*.
 
 Element deletion is *soft*: a delete hides the element, operations from
 history still replay onto it, and a later create with the same id resurrects
@@ -126,7 +137,7 @@ it with its retained properties. For list items, delete always wins.
 dotnet test
 ```
 
-The suite (191 tests) covers:
+The suite (205 tests) covers:
 
 - model/state semantics incl. tombstoned lists and resurrect behavior,
 - operation tree branching, LCA, path computation and re-attachment,
@@ -139,4 +150,8 @@ The suite (191 tests) covers:
   public, both privates and a fresh replayed checkout,
 - end-to-end tests: real gRPC server with two connected clients (Alice & Bob)
   editing metamodel + model concurrently, updating, committing, streaming
-  public operations and querying awareness.
+  public operations and querying awareness,
+- regression tests from an adversarial audit: branching follower chains,
+  multiple competing inserts at one anchor, moved anchors, delete-then-
+  resurrect nets, superseded-operation classification and awareness cache
+  invalidation.
