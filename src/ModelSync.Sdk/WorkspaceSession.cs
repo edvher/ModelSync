@@ -192,8 +192,10 @@ public sealed class WorkspaceSession : IAsyncDisposable
 
     /// <summary>
     /// Pulls the public changes into this workspace. The server detects and
-    /// resolves conflicts; the returned public and resolution operations are
-    /// replayed into the local replica.
+    /// resolves conflicts; the local replica replays the returned operations
+    /// in canonical branch order — the public delta, then this workspace's own
+    /// re-executed operations, then the resolutions — so it converges to the
+    /// exact state a fresh replay of the branch would produce.
     /// </summary>
     public async Task<UpdateResult> UpdateAsync(
         ResolutionStrategy strategy = ResolutionStrategy.ChildWins,
@@ -201,6 +203,7 @@ public sealed class WorkspaceSession : IAsyncDisposable
     {
         var result = await _client.UpdateAsync(WorkspaceId, strategy, ct);
         Model.ApplyAll(result.PublicOperations);
+        Model.ApplyAll(result.ReplayedLocalOperations);
         Model.ApplyAll(result.ResolutionOperations);
         return result;
     }

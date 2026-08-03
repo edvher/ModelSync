@@ -129,6 +129,10 @@ message UpdateResponse {
   repeated OperationMessage public_operations = 2;
   repeated ConflictMessage conflicts = 3;
   repeated OperationMessage resolution_operations = 4;
+  // The workspace's own divergent operations, re-executed after the public
+  // operations so replicas mirror the canonical branch replay order:
+  // public delta, then the local delta, then the resolutions.
+  repeated OperationMessage replayed_local_operations = 5;
 }
 
 message CommitRequest {

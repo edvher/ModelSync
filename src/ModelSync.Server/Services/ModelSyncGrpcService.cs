@@ -51,6 +51,7 @@ public sealed class ModelSyncGrpcService : ModelSyncService.ModelSyncServiceBase
             var result = _service.Update(request.WorkspaceId, (Core.ResolutionStrategy)(int)request.Strategy);
             var response = new UpdateResponse { WasUpToDate = result.WasUpToDate };
             response.PublicOperations.AddRange(result.PublicOperations.Select(ProtoMapper.ToMessage));
+            response.ReplayedLocalOperations.AddRange(result.ReplayedLocalOperations.Select(ProtoMapper.ToMessage));
             response.Conflicts.AddRange(result.Conflicts.Select(ProtoMapper.ToMessage));
             response.ResolutionOperations.AddRange(result.ResolutionOperations.Select(ProtoMapper.ToMessage));
             return Task.FromResult(response);

@@ -62,6 +62,7 @@ public sealed class ModelSyncClient : IAsyncDisposable
         return new UpdateResult(
             response.WasUpToDate,
             response.PublicOperations.Select(ProtoMapper.ToOperation).ToList(),
+            response.ReplayedLocalOperations.Select(ProtoMapper.ToOperation).ToList(),
             response.Conflicts.Select(ProtoMapper.ToConflict).ToList(),
             response.ResolutionOperations.Select(ProtoMapper.ToOperation).ToList());
     }

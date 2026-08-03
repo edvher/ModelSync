@@ -4,11 +4,12 @@ namespace ModelSync.Core;
 public sealed record UpdateResult(
     bool WasUpToDate,
     IReadOnlyList<Operation> PublicOperations,
+    IReadOnlyList<Operation> ReplayedLocalOperations,
     IReadOnlyList<Conflict> Conflicts,
     IReadOnlyList<Operation> ResolutionOperations)
 {
     public static UpdateResult UpToDate { get; } =
-        new(true, Array.Empty<Operation>(), Array.Empty<Conflict>(), Array.Empty<Operation>());
+        new(true, Array.Empty<Operation>(), Array.Empty<Operation>(), Array.Empty<Conflict>(), Array.Empty<Operation>());
 }
 
 /// <summary>Result of committing a private workspace to the public branch.</summary>
@@ -146,9 +147,15 @@ public sealed class ModelService
             var childDelta = Tree.PathBetween(branchingPoint, childHead);
             var conflicts = ConflictDetector.Detect(publicDelta, childDelta);
 
-            // 1) Replay the public changes onto the private model. These operations
-            //    already exist in the tree; only the branch shape changes.
+            // 1) Replay the public changes onto the private model, then RE-EXECUTE
+            //    the private delta on top. The materialized model must equal the
+            //    branch replay order (public history, then the private delta) —
+            //    not the order in which the edits happened to arrive locally.
+            //    Without this, slots edited on both sides that no resolution
+            //    re-asserts (e.g. edits governed by an element-existence
+            //    conflict) would diverge between the live model and a replay.
             model.ApplyAll(publicDelta);
+            model.ApplyAll(childDelta);
 
             // 2) Re-attach the private branch onto the public head so the branch
             //    path replays as: public history, then private delta.
@@ -178,10 +185,14 @@ public sealed class ModelService
                 resolvedConflicts.Add(resolutions.Count > 0 ? conflict with { Resolution = resolutions[0] } : conflict);
             }
 
-            result = new UpdateResult(false, publicDelta, resolvedConflicts, resolutionOps);
+            result = new UpdateResult(false, publicDelta, childDelta, resolvedConflicts, resolutionOps);
         }
 
+        // Notify in canonical branch order (public, re-executed local, then
+        // resolutions) so live followers of this branch converge to the same
+        // state as a fresh replay.
         var notified = new List<Operation>(result.PublicOperations);
+        notified.AddRange(result.ReplayedLocalOperations);
         notified.AddRange(result.ResolutionOperations);
         OperationsApplied?.Invoke(workspaceId, notified);
         WorkspaceSynchronized?.Invoke(workspaceId);

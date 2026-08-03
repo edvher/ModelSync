@@ -137,7 +137,7 @@ it with its retained properties. For list items, delete always wins.
 dotnet test
 ```
 
-The suite (205 tests) covers:
+The suite (210 tests) covers:
 
 - model/state semantics incl. tombstoned lists and resurrect behavior,
 - operation tree branching, LCA, path computation and re-attachment,
@@ -145,9 +145,23 @@ The suite (205 tests) covers:
   per property type),
 - synchronization scenarios mirroring the thesis running examples (including
   the list POC outcomes `[A,X,U,V,B,C]` / `[A,U,V,X,B,C]`),
-- a bounded **state-space exploration oracle**: all combinations of concurrent
+- a **school management use-case** (`SchoolScenarioTests`): a registrar and the
+  teachers' office collaboratively build the metamodel (School / Teacher /
+  Student / Course) and its instances through the star topology, exercising
+  every property kind — singles, subject sets, office-hour maps and an ordered
+  waiting list (≤ 3 entries),
+- a pairwise **state-space exploration oracle**: all combinations of concurrent
   atomic edits on both sides, for both strategies, asserting convergence of
   public, both privates and a fresh replayed checkout,
+- a **depth-first state-space exploration** (`DeepStateSpaceExplorationTests`):
+  from the base state, every enabled action (every insert position, every
+  removal, every set/map/single edit, element delete/recreate, plus commit and
+  update with both strategies) is explored recursively; states are deduplicated
+  by a canonical signature, classified as in-sync / diverged / conflicted, and
+  from *every* reachable state a full synchronization round must converge all
+  replicas under both winner strategies (see
+  [docs/list-synchronization.md](docs/list-synchronization.md) for the list
+  merge algorithm this validates),
 - end-to-end tests: real gRPC server with two connected clients (Alice & Bob)
   editing metamodel + model concurrently, updating, committing, streaming
   public operations and querying awareness,
