@@ -62,7 +62,8 @@ foreach (var name in scenarios.Distinct())
     Console.WriteLine($"  conflict coverage: categories [{string.Join(", ", stats.Categories.OrderBy(c => c))}], " +
                       $"merge types [{string.Join(", ", stats.MergeTypes.OrderBy(c => c))}]");
     Console.WriteLine($"  wrote {dotPath} and {mmdPath} in {started.ElapsedMilliseconds} ms");
-    Console.WriteLine($"  render: dot -Tsvg {dotPath} -o {Path.ChangeExtension(dotPath, \".svg\")}");
+    var svgPath = Path.ChangeExtension(dotPath, ".svg");
+    Console.WriteLine($"  render: dot -Tsvg {dotPath} -o {svgPath}");
 }
 
 return 0;
