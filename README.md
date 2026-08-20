@@ -44,7 +44,16 @@ resolution):
 | `src/ModelSync.Core` | Model state, operations, tree-shaped operation history, conflict detection/resolution, workspace service, conflict awareness. Pure .NET, no I/O. |
 | `src/ModelSync.Server` | gRPC server (checkout/apply/update/commit/subscribe/awareness) plus a live HTML dashboard of the operation tree. |
 | `src/ModelSync.Sdk` | Client SDK: low-level `ModelSyncClient` and high-level `WorkspaceSession` with a local replica reconstructed purely by operation replay. |
-| `tests/ModelSync.Tests` | xUnit suite: unit tests, the full conflict catalog, synchronization scenarios, a bounded state-space exploration oracle, and end-to-end tests with two clients against the real server. |
+| `src/ModelSync.Exploration` | Reusable state-space explorer plus a CLI that generates the full state/transition graphs (Graphviz DOT + Mermaid) for docs and paper figures. |
+| `tests/ModelSync.Tests` | xUnit suite: unit tests, the full conflict catalog, synchronization scenarios, exhaustive and randomized state-space oracles, and end-to-end tests with two clients against the real server. |
+| `benchmarks/ModelSync.Benchmarks` | BenchmarkDotNet suites for the scalability curves: conflict detection vs. delta size, sync round vs. concurrent edits, checkout replay vs. history length. |
+
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) — system and operation-tree architecture (diagrams).
+- [docs/list-synchronization.md](docs/list-synchronization.md) — the list merge algorithm, with pipeline and transition diagrams and the generated state-space figure.
+- [docs/conflict-catalog.md](docs/conflict-catalog.md) — every possible conflict and its outcome per winning side.
+- [docs/figures/](docs/figures/) — generated state-space graphs (DOT + Mermaid).
 
 ## Running the server
 
@@ -137,7 +146,7 @@ it with its retained properties. For list items, delete always wins.
 dotnet test
 ```
 
-The suite (210 tests) covers:
+The suite (223 tests) covers:
 
 - model/state semantics incl. tombstoned lists and resurrect behavior,
 - operation tree branching, LCA, path computation and re-attachment,
@@ -165,7 +174,40 @@ The suite (210 tests) covers:
 - end-to-end tests: real gRPC server with two connected clients (Alice & Bob)
   editing metamodel + model concurrently, updating, committing, streaming
   public operations and querying awareness,
+- **property-based randomized tests** (`RandomizedConvergenceTests`): three
+  private workspaces issue random operations over all property kinds with
+  random update/commit interleavings and random winner strategies (fixed
+  seeds, reproducible); after a final sync round all replicas and a fresh
+  replay must agree on the complete state — soft-deleted elements, tombstone
+  values and full list chains included,
 - regression tests from an adversarial audit: branching follower chains,
   multiple competing inserts at one anchor, moved anchors, delete-then-
-  resurrect nets, superseded-operation classification and awareness cache
-  invalidation.
+  resurrect nets, superseded-operation classification, awareness cache
+  invalidation, and resurrect-after-divergent-tombstone-edits rounds.
+
+## State-space graphs
+
+The exploration CLI regenerates the state/transition graphs used in the docs
+(and renderable for papers):
+
+```bash
+dotnet run --project src/ModelSync.Exploration -- all --out docs/figures
+dot -Tpdf docs/figures/state-space-paper-list.dot -o state-space.pdf   # needs graphviz
+```
+
+Scenarios: `paper-list` (39 states — figure-sized), `list` (601 states),
+`mixed` (1 995 states, all property kinds). Nodes are colored by
+synchronization state (in-sync / diverged / conflicted); `†` marks tombstones.
+
+## Benchmarks
+
+```bash
+dotnet run -c Release --project benchmarks/ModelSync.Benchmarks              # full run
+dotnet run -c Release --project benchmarks/ModelSync.Benchmarks -- --job short --filter '*Detect*'
+```
+
+Three suites produce the scalability curves of the approach: conflict
+detection is linear in the two deltas (never in total history), a full
+update/commit round is linear in the concurrent edit count, and fresh checkout
+(history replay) is linear in history length — the known non-incremental cost
+of the operation-based representation.
