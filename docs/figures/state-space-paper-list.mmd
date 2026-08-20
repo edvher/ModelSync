@@ -1,0 +1,100 @@
+---
+title: "ModelSync state space — paper-list (39 states, 54 transitions)"
+---
+flowchart TD
+  classDef insync fill:#d5f0d9,stroke:#2e7d32,color:#1b3a1f;
+  classDef diverged fill:#fdf3d0,stroke:#b58900,color:#4a3d10;
+  classDef conflicted fill:#f9d7d7,stroke:#c62828,color:#4a1414;
+  S0["P:&#91;&#93; A:&#91;&#93; B:&#91;&#93;"]:::insync
+  S1["P:&#91;&#93; A:&#91;x&#93;↑1↓0 B:&#91;&#93;"]:::diverged
+  S2["P:&#91;&#93; A:&#91;†x&#93;↑2↓0 B:&#91;&#93;"]:::diverged
+  S3["P:&#91;&#93; A:&#91;†x&#93;↑2↓0 B:&#91;y&#93;↑1↓0"]:::diverged
+  S4["P:&#91;&#93; A:&#91;†x&#93;↑2↓0 B:&#91;†y&#93;↑2↓0"]:::diverged
+  S5["P:&#91;†x&#93; A:&#91;†x&#93; B:&#91;y&#93;↑1↓2"]:::diverged
+  S6["P:&#91;y&#93; A:&#91;†x&#93;↑2↓1 B:&#91;y&#93;"]:::diverged
+  S7["P:&#91;†x&#93; A:&#91;†x&#93; B:&#91;&#93;↑0↓2"]:::diverged
+  S8["P:&#91;†x&#93; A:&#91;†x&#93; B:&#91;†x&#93;"]:::insync
+  S9["P:&#91;&#93; A:&#91;x&#93;↑1↓0 B:&#91;y&#93;↑1↓0"]:::diverged
+  S10["P:&#91;&#93; A:&#91;x&#93;↑1↓0 B:&#91;†y&#93;↑2↓0"]:::diverged
+  S11["P:&#91;x&#93; A:&#91;x&#93; B:&#91;†y&#93;↑2↓1"]:::diverged
+  S12["P:&#91;†y&#93; A:&#91;x&#93;↑1↓2 B:&#91;†y&#93;"]:::diverged
+  S13["P:&#91;x&#93; A:&#91;x&#93; B:&#91;y&#93;↑1↓1"]:::conflicted
+  S14["P:&#91;x&#93; A:&#91;†x&#93;↑1↓0 B:&#91;y&#93;↑1↓1"]:::conflicted
+  S15["P:&#91;x&#93; A:&#91;x&#93; B:&#91;y x&#93;↑2↓0"]:::diverged
+  S16["P:&#91;x&#93; A:&#91;x&#93; B:&#91;x y&#93;↑2↓0"]:::diverged
+  S17["P:&#91;y&#93; A:&#91;x&#93;↑1↓1 B:&#91;y&#93;"]:::conflicted
+  S18["P:&#91;y&#93; A:&#91;x&#93;↑1↓1 B:&#91;†y&#93;↑1↓0"]:::conflicted
+  S19["P:&#91;y&#93; A:&#91;x y&#93;↑2↓0 B:&#91;y&#93;"]:::diverged
+  S20["P:&#91;y&#93; A:&#91;y x&#93;↑2↓0 B:&#91;y&#93;"]:::diverged
+  S21["P:&#91;x&#93; A:&#91;x&#93; B:&#91;&#93;↑0↓1"]:::diverged
+  S22["P:&#91;x&#93; A:&#91;†x&#93;↑1↓0 B:&#91;&#93;↑0↓1"]:::diverged
+  S23["P:&#91;x&#93; A:&#91;†x&#93;↑1↓0 B:&#91;x&#93;"]:::diverged
+  S24["P:&#91;x&#93; A:&#91;x&#93; B:&#91;x&#93;"]:::insync
+  S25["P:&#91;x&#93; A:&#91;x&#93; B:&#91;y x&#93;↑1↓0"]:::diverged
+  S26["P:&#91;x&#93; A:&#91;x&#93; B:&#91;x y&#93;↑1↓0"]:::diverged
+  S27["P:&#91;x&#93; A:&#91;x&#93; B:&#91;†x&#93;↑1↓0"]:::diverged
+  S28["P:&#91;&#93; A:&#91;&#93; B:&#91;y&#93;↑1↓0"]:::diverged
+  S29["P:&#91;&#93; A:&#91;&#93; B:&#91;†y&#93;↑2↓0"]:::diverged
+  S30["P:&#91;†y&#93; A:&#91;&#93;↑0↓2 B:&#91;†y&#93;"]:::diverged
+  S31["P:&#91;†y&#93; A:&#91;†y&#93; B:&#91;†y&#93;"]:::insync
+  S32["P:&#91;y&#93; A:&#91;&#93;↑0↓1 B:&#91;y&#93;"]:::diverged
+  S33["P:&#91;y&#93; A:&#91;&#93;↑0↓1 B:&#91;†y&#93;↑1↓0"]:::diverged
+  S34["P:&#91;y&#93; A:&#91;y&#93; B:&#91;†y&#93;↑1↓0"]:::diverged
+  S35["P:&#91;y&#93; A:&#91;y&#93; B:&#91;y&#93;"]:::insync
+  S36["P:&#91;y&#93; A:&#91;x y&#93;↑1↓0 B:&#91;y&#93;"]:::diverged
+  S37["P:&#91;y&#93; A:&#91;y x&#93;↑1↓0 B:&#91;y&#93;"]:::diverged
+  S38["P:&#91;y&#93; A:&#91;†y&#93;↑1↓0 B:&#91;y&#93;"]:::diverged
+  S3 -->|"B:rm:y"| S4
+  S3 -->|"A:commit"| S5
+  S3 -->|"B:commit"| S6
+  S2 -->|"B:ins:y@head"| S3
+  S7 -->|"B:ins:y@head"| S5
+  S7 -->|"B:update"| S8
+  S2 -->|"A:commit"| S7
+  S1 -->|"A:rm:x"| S2
+  S9 -->|"A:rm:x"| S3
+  S10 -->|"A:rm:x"| S4
+  S10 -->|"A:commit"| S11
+  S10 -->|"B:commit"| S12
+  S9 -->|"B:rm:y"| S10
+  S13 -->|"A:rm:x"| S14
+  S13 -->|"B:rm:y"| S11
+  S13 -->|"B:update:child-wins"| S15
+  S13 -->|"B:update:parent-wins"| S16
+  S9 -->|"A:commit"| S13
+  S17 -->|"A:rm:x"| S6
+  S17 -->|"B:rm:y"| S18
+  S17 -->|"A:update:child-wins"| S19
+  S17 -->|"A:update:parent-wins"| S20
+  S9 -->|"B:commit"| S17
+  S1 -->|"B:ins:y@head"| S9
+  S22 -->|"B:ins:y@head"| S14
+  S22 -->|"A:commit"| S7
+  S22 -->|"B:update"| S23
+  S21 -->|"A:rm:x"| S22
+  S21 -->|"B:ins:y@head"| S13
+  S24 -->|"A:rm:x"| S23
+  S24 -->|"B:ins:y@head"| S25
+  S24 -->|"B:ins:y@x"| S26
+  S24 -->|"B:rm:x"| S27
+  S21 -->|"B:update"| S24
+  S1 -->|"A:commit"| S21
+  S0 -->|"A:ins:x@head"| S1
+  S28 -->|"A:ins:x@head"| S9
+  S29 -->|"A:ins:x@head"| S10
+  S30 -->|"A:ins:x@head"| S12
+  S30 -->|"A:update"| S31
+  S29 -->|"B:commit"| S30
+  S28 -->|"B:rm:y"| S29
+  S32 -->|"A:ins:x@head"| S17
+  S33 -->|"A:ins:x@head"| S18
+  S33 -->|"A:update"| S34
+  S33 -->|"B:commit"| S30
+  S32 -->|"B:rm:y"| S33
+  S35 -->|"A:ins:x@head"| S36
+  S35 -->|"A:ins:x@y"| S37
+  S35 -->|"A:rm:y"| S38
+  S35 -->|"B:rm:y"| S34
+  S32 -->|"A:update"| S35
+  S28 -->|"B:commit"| S32
+  S0 -->|"B:ins:y@head"| S28
