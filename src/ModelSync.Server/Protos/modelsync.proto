@@ -1,20 +1,25 @@
 syntax = "proto3";
 
-option csharp_namespace = "ModelSync.Server";
+option csharp_namespace = "ModelSync.Protocol";
 
-package modelsync;
+package modelsync.v1;
+
+// ----------------------------------------------------------------------------
+// Operations
+// ----------------------------------------------------------------------------
 
 enum OperationType {
-  OPERATION_TYPE_NONE = 0;
+  OPERATION_TYPE_UNSPECIFIED = 0;
   OPERATION_TYPE_CREATE_ELEMENT = 1;
   OPERATION_TYPE_DELETE_ELEMENT = 2;
   OPERATION_TYPE_SET_PROPERTY = 3;
-  OPERATION_TYPE_ADD_TO_LIST_PROPERTY = 4;
-  OPERATION_TYPE_REMOVE_FROM_LIST_PROPERTY = 5;
-  OPERATION_TYPE_ADD_TO_SET_PROPERTY = 6;
-  OPERATION_TYPE_REMOVE_FROM_SET_PROPERTY = 7;
-  OPERATION_TYPE_UPDATE_MAP_ENTRY = 8;
-  OPERATION_TYPE_REMOVE_MAP_ENTRY = 9;
+  OPERATION_TYPE_UNSET_PROPERTY = 4;
+  OPERATION_TYPE_ADD_SET_ITEM = 5;
+  OPERATION_TYPE_REMOVE_SET_ITEM = 6;
+  OPERATION_TYPE_PUT_MAP_ENTRY = 7;
+  OPERATION_TYPE_REMOVE_MAP_ENTRY = 8;
+  OPERATION_TYPE_INSERT_LIST_ITEM = 9;
+  OPERATION_TYPE_REMOVE_LIST_ITEM = 10;
 }
 
 enum ValueKind {
@@ -29,45 +34,169 @@ enum ValueKind {
 message OperationMessage {
   string id = 1;
   OperationType type = 2;
-  string model_name = 3;
+  string workspace_id = 3;
   string element_id = 4;
-  string element_type = 5;
-  string property_name = 6;
-  string value = 7;
-  string after_item_id = 8;
-  string item_id = 9;
-  string map_key = 10;
-  ValueKind value_kind = 11;
-  int64 timestamp_unix_ms = 12;
+  optional string element_type_id = 5;
+  optional string property_name = 6;
+  optional string value = 7;
+  ValueKind value_kind = 8;
+  optional string item_id = 9;
+  optional string after_item_id = 10;
+  optional string map_key = 11;
+  bool is_resolution = 12;
+  int64 timestamp_unix_ms = 13;
 }
 
+// ----------------------------------------------------------------------------
+// Conflicts
+// ----------------------------------------------------------------------------
+
+enum ConflictSeverity {
+  CONFLICT_SEVERITY_REAL = 0;
+  CONFLICT_SEVERITY_PSEUDO = 1;
+}
+
+enum MergeConflictType {
+  MERGE_CONFLICT_TYPE_MMC = 0;
+  MERGE_CONFLICT_TYPE_DMC = 1;
+  MERGE_CONFLICT_TYPE_MDC = 2;
+  MERGE_CONFLICT_TYPE_DDC = 3;
+}
+
+enum ConflictCategory {
+  CONFLICT_CATEGORY_SINGLE_VALUE = 0;
+  CONFLICT_CATEGORY_ELEMENT_EXISTENCE = 1;
+  CONFLICT_CATEGORY_SET_MEMBERSHIP = 2;
+  CONFLICT_CATEGORY_MAP_ENTRY = 3;
+  CONFLICT_CATEGORY_LIST_ORDER = 4;
+  CONFLICT_CATEGORY_LIST_ANCHOR_DELETED = 5;
+  CONFLICT_CATEGORY_LIST_ANCHOR_MOVED = 6;
+}
+
+enum ResolutionPolicy {
+  RESOLUTION_POLICY_IGNORE = 0;
+  RESOLUTION_POLICY_CHOOSE = 1;
+  RESOLUTION_POLICY_MERGE = 2;
+}
+
+enum ResolutionStrategy {
+  RESOLUTION_STRATEGY_CHILD_WINS = 0;
+  RESOLUTION_STRATEGY_PARENT_WINS = 1;
+}
+
+message ConflictMessage {
+  ConflictCategory category = 1;
+  MergeConflictType merge_type = 2;
+  ConflictSeverity severity = 3;
+  ResolutionPolicy policy = 4;
+  bool requires_resolution = 5;
+  string conflict_key = 6;
+  OperationMessage parent_operation = 7;
+  OperationMessage child_operation = 8;
+  optional OperationMessage resolution = 9;
+}
+
+// ----------------------------------------------------------------------------
+// Requests / responses
+// ----------------------------------------------------------------------------
+
 message CheckoutRequest {
-  string model_name = 1;
+  string workspace_id = 1;
 }
 
 message CheckoutResponse {
   repeated OperationMessage operations = 1;
 }
 
-message ApplyOperationRequest {
-  string model_name = 1;
+message ApplyRequest {
+  string workspace_id = 1;
   OperationMessage operation = 2;
 }
 
-message OperationAck {
-  string operation_id = 1;
+message ApplyResponse {
+  bool accepted = 1;
+  string error = 2;
+  OperationMessage operation = 3;
+}
+
+message UpdateRequest {
+  string workspace_id = 1;
+  ResolutionStrategy strategy = 2;
+}
+
+message UpdateResponse {
+  bool was_up_to_date = 1;
+  repeated OperationMessage public_operations = 2;
+  repeated ConflictMessage conflicts = 3;
+  repeated OperationMessage resolution_operations = 4;
+  // The workspace's own divergent operations, re-executed after the public
+  // operations so replicas mirror the canonical branch replay order:
+  // public delta, then the local delta, then the resolutions.
+  repeated OperationMessage replayed_local_operations = 5;
+}
+
+message CommitRequest {
+  string workspace_id = 1;
+}
+
+message CommitResponse {
+  bool success = 1;
+  string reason = 2;
+  repeated OperationMessage committed_operations = 3;
 }
 
 message SubscribeRequest {
-  string model_name = 1;
+  string workspace_id = 1;
+  // When true only live operations are streamed; otherwise the full history is
+  // replayed first.
+  bool skip_replay = 2;
 }
 
 message OperationEvent {
-  OperationMessage operation = 1;
+  string workspace_id = 1;
+  OperationMessage operation = 2;
 }
 
-service ModelSyncApi {
+message AwarenessRequest {
+  string workspace_a = 1;
+  string workspace_b = 2;
+}
+
+message AwarenessResponse {
+  repeated ConflictMessage conflicts = 1;
+}
+
+message ListWorkspacesRequest {
+}
+
+message ListWorkspacesResponse {
+  repeated string workspace_ids = 1;
+}
+
+// ----------------------------------------------------------------------------
+// Service
+// ----------------------------------------------------------------------------
+
+service ModelSyncService {
+  // Creates (or resumes) a workspace branch and returns its operation history
+  // so the client can reconstruct the model by replay.
   rpc Checkout(CheckoutRequest) returns (CheckoutResponse);
-  rpc ApplyOperation(ApplyOperationRequest) returns (OperationAck);
-  rpc SubscribeOperations(SubscribeRequest) returns (stream OperationEvent);
+
+  // Applies a single new operation to a workspace branch.
+  rpc Apply(ApplyRequest) returns (ApplyResponse);
+
+  // Pulls public changes into the workspace, detecting and resolving conflicts.
+  rpc Update(UpdateRequest) returns (UpdateResponse);
+
+  // Pushes the workspace's changes to the public branch (fast-forward only).
+  rpc Commit(CommitRequest) returns (CommitResponse);
+
+  // Streams operations applied to a workspace branch (optionally after a full
+  // history replay).
+  rpc Subscribe(SubscribeRequest) returns (stream OperationEvent);
+
+  // Conflict awareness between any two workspaces without synchronizing.
+  rpc GetAwarenessConflicts(AwarenessRequest) returns (AwarenessResponse);
+
+  rpc ListWorkspaces(ListWorkspacesRequest) returns (ListWorkspacesResponse);
 }
