@@ -15,5 +15,6 @@
     <ProjectReference Include="../../src/ModelSync.Core/ModelSync.Core.csproj" />
     <ProjectReference Include="../../src/ModelSync.Sdk/ModelSync.Sdk.csproj" />
     <ProjectReference Include="../../src/ModelSync.Server/ModelSync.Server.csproj" />
+    <ProjectReference Include="..\..\src\ModelSync.Exploration\ModelSync.Exploration.csproj" />
   </ItemGroup>
 </Project>
