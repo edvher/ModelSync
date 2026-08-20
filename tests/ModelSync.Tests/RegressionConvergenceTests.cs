@@ -222,4 +222,72 @@ public class RegressionConvergenceTests
         var fresh = s.Checkout("fresh-" + Guid.NewGuid().ToString("N"));
         ModelAssert.Equivalent(pub, fresh);
     }
+
+    private static void AssertConvergedIncludingTombstones(ModelService service)
+    {
+        var publicModel = service.GetModel(ModelService.PublicWorkspaceId);
+        ModelAssert.EquivalentIncludingTombstones(publicModel, service.GetModel(A));
+        ModelAssert.EquivalentIncludingTombstones(publicModel, service.GetModel(B));
+        var fresh = service.Checkout("fresh-" + Guid.NewGuid().ToString("N"));
+        ModelAssert.EquivalentIncludingTombstones(publicModel, fresh);
+    }
+
+    // 9. Both sides edit a property, then both delete the element (DDC pseudo —
+    //    no resolution). Without re-executing the private delta on update, the
+    //    replicas would keep divergent property values on the tombstone; a
+    //    later resurrect would surface the divergence with no conflict left to
+    //    detect it. The update replay-order fix must keep even hidden state
+    //    identical, so the resurrect round stays convergent.
+    [Fact]
+    public void Repro9_ResurrectAfterDivergentTombstoneEdits_Ddc()
+    {
+        var s = NewService(Op.Create("e1"), Op.Set("e1", "name", "base"));
+
+        s.Apply(A, Op.Set("e1", "name", "alice"));
+        s.Apply(A, Op.Delete("e1"));
+        s.Apply(B, Op.Set("e1", "name", "bob"));
+        s.Apply(B, Op.Delete("e1"));
+
+        Dance(s, ResolutionStrategy.ChildWins);
+        AssertConvergedIncludingTombstones(s);
+        Assert.Null(s.GetModel(ModelService.PublicWorkspaceId).GetElement("e1"));
+
+        // The resurrect: one side recreates the element; the tombstone's
+        // retained properties become visible again — identically everywhere.
+        s.Apply(A, Op.Create("e1"));
+        Dance(s, ResolutionStrategy.ChildWins);
+        AssertConvergedIncludingTombstones(s);
+
+        var element = s.GetModel(ModelService.PublicWorkspaceId).GetElement("e1");
+        Assert.NotNull(element);
+        // Canonical replay order: public delta (alice, delete), then B's
+        // re-executed delta (bob, delete) — the tombstone kept "bob".
+        Assert.Equal("bob", element!.GetProperty("name")!.SingleValue!.Content);
+    }
+
+    // 10. Delete wins over a concurrent constructive edit (DMC, ParentWins);
+    //     a later resurrect must expose the same retained value on every
+    //     replica, including a fresh replay.
+    [Fact]
+    public void Repro10_ResurrectAfterDeleteWins_ExposesIdenticalRetainedState()
+    {
+        var s = NewService(Op.Create("e1"), Op.Set("e1", "name", "base"));
+
+        s.Apply(A, Op.Set("e1", "name", "alice"));
+        s.Apply(A, Op.Delete("e1"));
+        s.Apply(B, Op.Set("e1", "grade", "A+"));
+
+        Dance(s, ResolutionStrategy.ParentWins);
+        AssertConvergedIncludingTombstones(s);
+        Assert.Null(s.GetModel(ModelService.PublicWorkspaceId).GetElement("e1"));
+
+        s.Apply(B, Op.Create("e1"));
+        Dance(s, ResolutionStrategy.ParentWins);
+        AssertConvergedIncludingTombstones(s);
+
+        var element = s.GetModel(ModelService.PublicWorkspaceId).GetElement("e1");
+        Assert.NotNull(element);
+        Assert.Equal("alice", element!.GetProperty("name")!.SingleValue!.Content);
+        Assert.Equal("A+", element.GetProperty("grade")!.SingleValue!.Content);
+    }
 }
