@@ -53,3 +53,9 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+# BenchmarkDotNet results
+BenchmarkDotNet.Artifacts/
+
+# Large generated figures (regenerate with src/ModelSync.Exploration; only the paper-sized figure is committed)
+docs/figures/state-space-list.*
+docs/figures/state-space-mixed.*
