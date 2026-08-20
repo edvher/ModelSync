@@ -146,4 +146,46 @@ public static class ModelAssert
     public static IReadOnlyList<string> ListValues(ModelState model, string elementId, string property) =>
         model.GetElementIncludingDeleted(elementId)?.GetProperty(property)?.ListItems.Select(i => i.Value.Content).ToList()
         ?? new List<string>();
+
+    /// <summary>
+    /// Strict full-state equivalence: also compares soft-deleted elements,
+    /// property values on tombstoned elements, and complete list chains
+    /// including tombstone nodes and their order. Replicas that executed the
+    /// same canonical operation sequence must agree even on this hidden state —
+    /// otherwise a later resurrect could surface divergence.
+    /// </summary>
+    public static void EquivalentIncludingTombstones(ModelState expected, ModelState actual)
+    {
+        var expectedElements = expected.AllElements.Values.OrderBy(e => e.Id, StringComparer.Ordinal).ToList();
+        var actualElements = actual.AllElements.Values.OrderBy(e => e.Id, StringComparer.Ordinal).ToList();
+
+        Assert.Equal(expectedElements.Select(e => e.Id), actualElements.Select(e => e.Id));
+
+        foreach (var (e, a) in expectedElements.Zip(actualElements))
+        {
+            Assert.Equal(e.TypeId, a.TypeId);
+            Assert.Equal(e.IsAlive, a.IsAlive);
+
+            var expectedProps = e.Properties.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            var actualProps = a.Properties.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            Assert.Equal(expectedProps, actualProps);
+
+            foreach (var name in expectedProps)
+            {
+                var ep = e.Properties[name];
+                var ap = a.Properties[name];
+                Assert.Equal(ep.Cardinality, ap.Cardinality);
+                Assert.Equal(ep.SingleValue, ap.SingleValue);
+                Assert.Equal(
+                    ep.SetValues.Select(v => v.MembershipKey).OrderBy(v => v, StringComparer.Ordinal),
+                    ap.SetValues.Select(v => v.MembershipKey).OrderBy(v => v, StringComparer.Ordinal));
+                Assert.Equal(
+                    ep.MapValues.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => $"{p.Key}={p.Value.Content}"),
+                    ap.MapValues.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => $"{p.Key}={p.Value.Content}"));
+                Assert.Equal(
+                    ep.ListNodes.Select(n => $"{n.ItemId}={n.Value.Content}|{(n.IsDeleted ? "dead" : "alive")}"),
+                    ap.ListNodes.Select(n => $"{n.ItemId}={n.Value.Content}|{(n.IsDeleted ? "dead" : "alive")}"));
+            }
+        }
+    }
 }
